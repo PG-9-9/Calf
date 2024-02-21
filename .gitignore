@@ -9,19 +9,21 @@
 *.wav
 *.mp3
 
-# Potentially temporary/generated files
+# temporary/generated files
+*.tfrecord
+*.record
 *.keras
 *.data-00000-of-00001
 *.gz
 *.tar
 *.egg-info/
 
-# Specific model directories (be careful not to exclude necessary model files)
+# model directories 
 models/
 models_7/
 new_app/New_Models/ 
 
-# If you *never* need to track these file types, consider adding them to your global gitignore
+# Subsidary
 *.BUILD 
 *.proto
 *.xml
