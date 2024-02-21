@@ -1,0 +1,84 @@
+{
+    "annotations": [
+        {
+            "area": 10368,
+            "bbox": [
+                458,
+                306,
+                586,
+                387
+            ],
+            "category_id": 1,
+            "id": 0,
+            "image_id": 0,
+            "name": "kalb",
+            "pose": "Unspecified",
+            "truncated": 0,
+            "difficult": 0
+        },
+        {
+            "area": 8134,
+            "bbox": [
+                199,
+                256,
+                297,
+                339
+            ],
+            "category_id": 1,
+            "id": 0,
+            "image_id": 0,
+            "name": "kalb",
+            "pose": "Unspecified",
+            "truncated": 0,
+            "difficult": 0
+        },
+        {
+            "area": 840,
+            "bbox": [
+                321,
+                47,
+                361,
+                68
+            ],
+            "category_id": 1,
+            "id": 0,
+            "image_id": 0,
+            "name": "kalb",
+            "pose": "Unspecified",
+            "truncated": 0,
+            "difficult": 0
+        },
+        {
+            "area": 25230,
+            "bbox": [
+                320,
+                431,
+                494,
+                576
+            ],
+            "category_id": 1,
+            "id": 0,
+            "image_id": 0,
+            "name": "kalb",
+            "pose": "Unspecified",
+            "truncated": 1,
+            "difficult": 0
+        },
+        {
+            "area": 21730,
+            "bbox": [
+                339,
+                61,
+                445,
+                266
+            ],
+            "category_id": 0,
+            "id": 0,
+            "image_id": 0,
+            "name": "person",
+            "pose": "Unspecified",
+            "truncated": 0,
+            "difficult": 0
+        }
+    ]
+}
