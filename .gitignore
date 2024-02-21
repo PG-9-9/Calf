@@ -17,9 +17,9 @@
 *.egg-info/
 
 # Specific model directories (be careful not to exclude necessary model files)
-/Calf_Detection/models/
-/Calf_Detection/models_7/
-/Calf_Detection/new_app/New_Models/ 
+models/
+models_7/
+new_app/New_Models/ 
 
 # If you *never* need to track these file types, consider adding them to your global gitignore
 *.BUILD 
