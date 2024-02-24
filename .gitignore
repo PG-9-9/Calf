@@ -8,6 +8,7 @@
 *.jpeg 
 *.wav
 *.mp3
+*.csv
 
 # temporary/generated files
 *.tfrecord
@@ -17,6 +18,7 @@
 *.gz
 *.tar
 *.egg-info/
+*.h5
 
 # model directories 
 models/
