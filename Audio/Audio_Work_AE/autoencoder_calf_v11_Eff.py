@@ -224,7 +224,7 @@ def model_evaluation(autoencoder, X_test, y_test, evaluation_directory, model_ty
     plt.figure(figsize=(10, 6))
     plt.plot(mse_abnormal, label='MSE Error')
     plt.title('MSE Error Over Test Set')
-    plt.xlabel('Sample Index')
+    plt.xlabel('Entire subset')
     plt.ylabel('Mean Squared Error')
     plt.legend()
     plt.savefig(os.path.join(evaluation_directory, f'mse_error_plot_{model_type}_{timestamp}.png'))
