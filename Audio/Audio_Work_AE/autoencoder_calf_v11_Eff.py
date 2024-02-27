@@ -114,20 +114,6 @@ def process_file(args):
     windows = sliding_window(audio, window_size, step_size, sample_rate)
     return windows
 
-def generate_audio_windows(path, window_size, step_size, sample_rate, batch_size=10):
-    filenames = [f for f in os.listdir(path) if f.endswith('.wav')]
-    pool = Pool(processes=os.cpu_count())
-
-    for i in range(0, len(filenames), batch_size):
-        batch_files = filenames[i:i + batch_size]
-        windows_list = pool.map(process_file, [(filename, path, window_size, step_size, sample_rate) for filename in batch_files])
-        
-        for windows in windows_list:
-            yield windows
-
-    pool.close()
-    pool.join()
-
 # Feature extraction for each window
 
 def extract_features(audio_windows, sample_rate):
@@ -140,33 +126,6 @@ def extract_features(audio_windows, sample_rate):
         all_features = np.concatenate([mfccs, spectral_features, temporal_features, additional_features])
         features.append(all_features)
     return np.array(features)
-
-# Non LSTM Auto-encoder
-def simplified_autoencoder(timesteps, n_features):
-    input_layer = Input(shape=(n_features,))
-
-    # Encoder
-    encoder = Dense(128, activation='relu')(input_layer)
-    encoder = BatchNormalization()(encoder)
-    encoder = Dropout(0.1)(encoder)
-    encoder = Dense(64, activation='relu')(encoder)
-    encoder = BatchNormalization()(encoder)
-    encoder = Dropout(0.1)(encoder)
-    encoder = Dense(32, activation='relu')(encoder)
-
-    # Decoder
-    decoder = Dense(64, activation='relu')(encoder)
-    decoder = BatchNormalization()(decoder)
-    decoder = Dropout(0.1)(decoder)
-    decoder = Dense(128, activation='relu')(decoder)
-    decoder = BatchNormalization()(decoder)
-    decoder = Dropout(0.1)(decoder)
-    output_layer = Dense(n_features, activation='sigmoid')(decoder)
-
-    autoencoder = Model(inputs=input_layer, outputs=output_layer)
-    autoencoder.compile(optimizer='adam', loss='mean_squared_error')
-    return autoencoder
-
 
 # LSTM AutoEncoder
 def simplified_autoencoder_with_lstm(timesteps, n_features, lstm_neurons):
@@ -316,9 +275,7 @@ def hyperparameter_tuning(root_path, evaluation_path, data_path, config_list, us
         # Select the model based on LSTM flag
         if use_lstm:
             autoencoder = simplified_autoencoder_with_lstm(X_train_reshaped.shape[1], X_train_reshaped.shape[2], lstm_neurons)
-        else:
-            autoencoder = simplified_autoencoder(X_train_reshaped.shape[1], X_train_reshaped.shape[1])  # Dimensionality changes for the LSTM
-
+        
         # Train the model
         autoencoder.fit(X_train_reshaped, X_train_reshaped, epochs=epochs, batch_size=batch_size,
                         validation_data=(X_val_reshaped, X_val_reshaped),
@@ -338,40 +295,6 @@ def train_model(X_train, X_val):
         logging.info("Model training completed")
     except Exception as e:
         logging.error("An error occurred during model training", exc_info=True)
-
-def get_current_memory_usage():
-    """
-    Returns the current memory usage of the python process in megabytes.
-    """
-    process = psutil.Process(os.getpid())
-    return process.memory_info().rss / 1024 / 1024  # Convert bytes to megabytes
-
-def find_optimal_batch_size(data_path, window_size, step_size, test_batch_sizes):
-    global SAMPLE_RATE
-    memory_usage = {}
-    performance = {}
-
-    for batch_size in test_batch_sizes:
-        try:
-            # Start timer
-            start_time = time.time()
-
-            # Generate and process audio windows
-            audio_windows_generator = generate_audio_windows(data_path['normal'], window_size, step_size, SAMPLE_RATE, batch_size=batch_size)
-            for audio_windows in audio_windows_generator:
-                _ = extract_features(audio_windows, SAMPLE_RATE) 
-
-            #  memory usage and performance
-            memory_usage[batch_size] = get_current_memory_usage()
-            performance[batch_size] = time.time() - start_time
-
-        except MemoryError:
-            logging.warning(f"Batch size {batch_size} caused out-of-memory error.")
-            break
-
-    # Determine the optimal batch size based on highest performance without exceeding memory limit (#TODO)
-    optimal_batch_size = max(performance, key=performance.get)
-    return optimal_batch_size, memory_usage, performance
 
 if __name__ == "__main__":
     try:
@@ -398,12 +321,6 @@ if __name__ == "__main__":
 
         # Hyperparameter tuning for Dense Autoencoder
         # hyperparameter_tuning(root_path, evaluation_path , data_path, config_list, use_lstm=False)
-
-        # test_batch_sizes = [10, 20, 30, 40, 50]  # Range of batch sizes to test
-        # optimal_batch_size, memory_usage, performance = find_optimal_batch_size(data_path, 10, 5, test_batch_sizes)
-        # print(f"Optimal Batch Size: {optimal_batch_size}")
-        # print(f"Memory Usage (MB): {memory_usage}")
-        # print(f"Performance (s): {performance}")
 
     except Exception as e:
         logging.error("An error occurred in the main script", exc_info=True)
