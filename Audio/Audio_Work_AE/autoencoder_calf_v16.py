@@ -52,7 +52,7 @@ def parse_filename_datetime(filename):
     """Parse the date and time from a given filename."""
     parts = filename.split('_')
     date_str = parts[1]
-    time_str = parts[2]
+    time_str = parts[2].split('.')[0]  # remove the file extension
     datetime_obj = datetime.strptime(f'{date_str} {time_str}', '%Y-%m-%d %H-%M-%S')
     return datetime_obj
 
@@ -67,6 +67,10 @@ def determine_aggregation_level(file_mapping):
         return 'day'
     else:
         return 'hour'
+    
+def count_anomalies(mse_test, thresholds):
+    anomalies_count = [np.sum(mse_test > threshold) for threshold in thresholds]
+    return anomalies_count
 
 # Feature Extraction:
 
@@ -159,7 +163,6 @@ def sliding_window(audio, window_size, step_size, sample_rate):
 
 # Data Processing for Model input.
 def prepare_data(features, labels):
-    # Adjusted to split data while preserving temporal order
     split_index = int(len(features) * 0.8)
     X_train, X_val = features[:split_index], features[split_index:]
     y_train, y_val = labels[:split_index], labels[split_index:]
@@ -201,6 +204,21 @@ def model_evaluation(autoencoder, X_test, file_mapping, evaluation_directory, mo
     # Generate predictions for the test set
     reconstructed_test = autoencoder.predict(X_test)
     mse_test = np.mean(np.power(X_test - reconstructed_test, 2), axis=(1, 2))
+    
+    # 
+    min_threshold = min(mse_test)  # minimum MSE value
+    max_threshold = max(mse_test)  # maximum MSE value
+    threshold_range = np.linspace(min_threshold, max_threshold, 10)  # Adjust the number of points as needed`
+    anomalies_count = count_anomalies(mse_test, threshold_range)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(threshold_range, anomalies_count, marker='o', linestyle='-')
+    plt.xlabel('Threshold Value')
+    plt.ylabel('Number of Anomalies Detected')
+    plt.title('Number of Anomalies Detected vs. Threshold Value')
+    plt.grid(True)
+    plt.savefig(os.path.join(evaluation_directory, f'anomalies_vs_threshold_{model_type}.png'))
+    plt.close()
     
     if file_mapping:
             aggregation_level = determine_aggregation_level(file_mapping)
@@ -261,8 +279,6 @@ def model_evaluation(autoencoder, X_test, file_mapping, evaluation_directory, mo
     except Exception as e:
         logging.error(f"Failed to save the model. Error: {str(e)}")
 
-
-
 def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal_data_path, config_list, use_lstm=True):
     global SAMPLE_RATE
     for config in config_list:
@@ -289,9 +305,9 @@ def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal
 if __name__ == "__main__":
     try:
         root_path = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE"
-        normal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset"
-        abnormal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset"
-        storage_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug'
+        normal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_superset"
+        abnormal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_superset"
+        storage_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2'
         print(f'current_directory : {os.getcwd()}')
         if os.path.exists(normal_data_path):
             print("It existssssss")
