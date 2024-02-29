@@ -23,13 +23,15 @@ from tensorflow.keras.layers import (
     Dense, Dropout, Input, BatchNormalization, LSTM, RepeatVector,
     TimeDistributed
 )
+from datetime import datetime
+
 from tensorflow.keras.callbacks import EarlyStopping
 import logging
 
 # Initialize logging
 SAMPLE_RATE = 44100  # sample rate constant
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-current_datetime = datetime.datetime.now()  
+current_datetime = datetime.now()  
 logging.info(f"AutoEncoder last ran on: {current_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
 # Sliding Window
 
@@ -155,9 +157,17 @@ def simplified_autoencoder_with_lstm(timesteps, n_features, lstm_neurons):
     autoencoder.compile(optimizer='adam', loss='mean_squared_error')
     return autoencoder
 
+def parse_date_time_from_filename(filename):
+    parts = filename.split('_')
+    date_part = parts[1]
+    time_part = parts[2].split('.')[0]
+    date_time_obj = datetime.strptime(f'{date_part} {time_part}', '%Y-%m-%d %H-%M-%S')
+    return date_time_obj
+
+
 def model_evaluation(autoencoder, X_test, y_test, evaluation_directory, model_type, X_abnormal,abnormal_file_map): #model, X_val, y_test, ev_path, label,X-abnormal, file_map
     # Generate a timestamp for unique filenames
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")    
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")    
     
     # Predict on the test set
     reconstructed_test = autoencoder.predict(X_test)
@@ -180,23 +190,67 @@ def model_evaluation(autoencoder, X_test, y_test, evaluation_directory, model_ty
     abnormal_mse = np.mean(np.power(X_abnormal - abnormal_predictions, 2), axis=1)
     
     # Aggregate MSE for abnormal files
-    abnormal_mse_aggregated = {}
-    for idx, mse in enumerate(abnormal_mse):
-        file_name = abnormal_file_map[idx]
-        if file_name in abnormal_mse_aggregated:
-            abnormal_mse_aggregated[file_name].append(mse)
-        else:
-            abnormal_mse_aggregated[file_name] = [mse]
+    file_mse = {}
+    for i, mse in enumerate(mse_abnormal):
+        file_name = abnormal_file_map[i]
+        file_mse[file_name] = file_mse.get(file_name, [])
+        file_mse[file_name].append(mse)
+        
+    mean_mse_per_file = {file: np.mean(mses) for file, mses in file_mse.items()}
+    files = list(mean_mse_per_file.keys())
+    mean_mses = list(mean_mse_per_file.values())
+    
+    # Aggregating MSE by minute and hour
+    mse_by_minute = {}
+    mse_by_hour = {}
+
+    for filename, mse in mean_mse_per_file.items():
+        date_time_obj = parse_date_time_from_filename(filename)
+        
+        minute_key = date_time_obj.strftime('%Y-%m-%d %H:%M')
+        mse_by_minute.setdefault(minute_key, []).append(mse)
+        
+        hour_key = date_time_obj.strftime('%Y-%m-%d %H')
+        mse_by_hour.setdefault(hour_key, []).append(mse)
+
+    # Calculate mean MSE for each aggregated minute and hour
+    mean_mse_by_minute = {k: np.mean(v) for k, v in mse_by_minute.items()}
+    mean_mse_by_hour = {k: np.mean(v) for k, v in mse_by_hour.items()}
+    
+    # Sort the dictionary by filenames
+    sorted_filenames = sorted(mean_mse_per_file.keys())
+    sorted_mse_values = [mean_mse_per_file[filename] for filename in sorted_filenames]
             
     # Plotting aggregated MSE for abnormal files
-    plt.figure(figsize=(10, 6))
-    for file_name, mses in abnormal_mse_aggregated.items():
-        plt.plot(mses, label=file_name)
-    plt.title(f'Aggregated MSE for Abnormal Files - {model_type}')
-    plt.ylabel('Mean Squared Error')
-    plt.xlabel('Window Index')
-    plt.legend()
-    plt.savefig(f'{evaluation_directory}/aggregated_mse_{model_type}.png')
+    plt.figure(figsize=(20, 5))  
+    plt.bar(sorted_filenames, sorted_mse_values, align='center')
+    plt.xticks(rotation=90)  # Rotate the labels to make them readable
+    plt.title('Aggregated MSE for Abnormal Files')
+    plt.ylabel('Mean MSE')
+    plt.xlabel('File Names')
+    plt.tight_layout()  
+    plt.show()
+    
+    # Plot aggregated MSE by minute
+    plt.figure(figsize=(15, 5))
+    plt.bar(mean_mse_by_minute.keys(), mean_mse_by_minute.values(), align='center')
+    plt.xticks(rotation=90)
+    plt.title('Aggregated MSE by Minute for Abnormal Files')
+    plt.ylabel('Mean MSE')
+    plt.xlabel('Date and Time (Minute)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(evaluation_directory, f'aggregated_mse_by_minute_{model_type}_{current_datetime.strftime("%Y-%m-%d_%H-%M-%S")}.png'))
+    plt.close()
+
+    # Plot aggregated MSE by hour
+    plt.figure(figsize=(15, 5))
+    plt.bar(mean_mse_by_hour.keys(), mean_mse_by_hour.values(), align='center')
+    plt.xticks(rotation=90)
+    plt.title('Aggregated MSE by Hour for Abnormal Files')
+    plt.ylabel('Mean MSE')
+    plt.xlabel('Date and Time (Hour)')
+    plt.tight_layout()
+    plt.savefig(os.path.join(evaluation_directory, f'aggregated_mse_by_hour_{model_type}{current_datetime.strftime("%Y-%m-%d%H-%M-%S")}.png'))
     plt.close()
     
     # Optimal threshold
@@ -282,7 +336,7 @@ def hyperparameter_tuning(root_path, evaluation_path, data_path, config_list, us
         all_labels = []
 
         # Process normal audio files
-        normal_audio_windows, normal_labels, _ = load_and_window_audio_files(data_path['normal'], 0, window_size, step_size, SAMPLE_RATE)
+        normal_audio_windows, normal_labels, normal_file_map = load_and_window_audio_files(data_path['normal'], 0, window_size, step_size, SAMPLE_RATE)
         normal_features = extract_features(normal_audio_windows, SAMPLE_RATE)
         all_features.extend(normal_features)
         all_labels.extend([0] * len(normal_features))
