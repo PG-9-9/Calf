@@ -82,13 +82,20 @@ def batch_process_audio_files(paths, sample_rate, window_size, step_size, batch_
     all_windows = []
     all_labels = []
     overlap_audio = np.array([])
-    for path, label in paths.items():
+
+    for label, path in paths.items():
+        print(f"Processing path for label '{label}': {path}")  # Debug print to check the path
+        if not os.path.exists(path):
+            logging.error(f"Directory does not exist: {path}")
+            continue  # Skip this iteration if path doesn't exist
+
         file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
         for i in range(0, len(file_paths), batch_size):
             batch_files = file_paths[i:i + batch_size]
-            windows, labels, overlap_audio = process_batch(batch_files, label, sample_rate, window_size, step_size, overlap_audio)
+            windows, temp_labels, overlap_audio = process_batch(batch_files, label, sample_rate, window_size, step_size, overlap_audio)
             all_windows.extend(windows)
-            all_labels.extend(labels)
+            all_labels.extend(temp_labels)
+
     return np.array(all_windows), np.array(all_labels)
 
 def process_batch(file_paths, label, sample_rate, window_size, step_size, overlap_audio):
@@ -207,7 +214,12 @@ def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal
         window_size, step_size, lstm_neurons, epochs, batch_size = config
 
         # Processing normal audio for training
-        windows, labels = batch_process_audio_files({'normal': normal_data_path}, SAMPLE_RATE, window_size, step_size, batch_size)
+        paths = {
+            'normal': normal_data_path,
+            'abnormal': abnormal_data_path
+        } 
+         
+        windows, labels = batch_process_audio_files(paths, SAMPLE_RATE, window_size, step_size, batch_size)
         features = extract_features(windows, SAMPLE_RATE)
         X_train_reshaped, X_val_reshaped, y_train, y_val = prepare_data(features, labels)
         
@@ -218,7 +230,7 @@ def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal
             autoencoder.fit(X_train_reshaped, X_train_reshaped, epochs=epochs, batch_size=batch_size, validation_data=(X_val_reshaped, X_val_reshaped), callbacks=[EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)], verbose=1)
         
         # Processing abnormal audio for testing
-        test_windows, _ = batch_process_audio_files({'abnormal': abnormal_data_path}, SAMPLE_RATE, window_size, step_size, batch_size)
+        test_windows, _ = batch_process_audio_files(paths, SAMPLE_RATE, window_size, step_size, batch_size)
         test_features = extract_features(test_windows, SAMPLE_RATE)
         X_test_reshaped, _, _, _ = prepare_data(test_features, np.zeros(len(test_features)))  # Labels not used for anomaly detection
         
@@ -227,11 +239,13 @@ def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal
         
 if __name__ == "__main__":
     try:
-        root_path = "Calf_Detection/Audio/Audio_Work_AE"
-        normal_data_path="Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset"
-        abnormal_data_path="Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset"
-        storage_path='Calf_Detection/Audio/Audio_Work_AE/New_Files'
-        
+        root_path = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE"
+        normal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset"
+        abnormal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset"
+        storage_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files'
+        print(f'current_directory : {os.getcwd()}')
+        if os.path.exists(normal_data_path):
+            print("It existssssss")
         config_list = [(10, 5, 32, 50, 32), (15, 7, 64, 100, 64) ]        # Hyperparameter Configurations [Window, Steps, LSTM , Epochs, Batch Size(for the audio files.)]
         hyperparameter_tuning(root_path, storage_path, normal_data_path, abnormal_data_path, config_list, use_lstm=True)
 
