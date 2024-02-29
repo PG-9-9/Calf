@@ -34,6 +34,40 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 current_datetime = datetime.now()  
 logging.info(f"AutoEncoder last ran on: {current_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
 
+# Utility Functions:
+def create_model_directory(root_path, window_size, step_size, lstm_neurons, epochs, batch_size):
+    model_directory = os.path.join(root_path, f"model_ws{window_size}_ss{step_size}_ln{lstm_neurons}_e{epochs}_bs{batch_size}")
+    if not os.path.exists(model_directory):
+        os.makedirs(model_directory)
+    return model_directory
+
+def parse_date_time_from_filename(filename):
+    parts = filename.split('_')
+    date_part = parts[1]
+    time_part = parts[2].split('.')[0]
+    date_time_obj = datetime.strptime(f'{date_part} {time_part}', '%Y-%m-%d %H-%M-%S')
+    return date_time_obj
+
+def parse_filename_datetime(filename):
+    """Parse the date and time from a given filename."""
+    parts = filename.split('_')
+    date_str = parts[1]
+    time_str = parts[2]
+    datetime_obj = datetime.strptime(f'{date_str} {time_str}', '%Y-%m-%d %H-%M-%S')
+    return datetime_obj
+
+def determine_aggregation_level(file_mapping):
+    """Determine whether to aggregate MSE by days or hours."""
+    dates = set()
+    for filename in file_mapping:
+        datetime_obj = parse_filename_datetime(filename)
+        dates.add(datetime_obj.date())
+    
+    if len(dates) >= 2:
+        return 'day'
+    else:
+        return 'hour'
+
 # Feature Extraction:
 
 # MFCCs 
@@ -81,22 +115,22 @@ def extract_features(audio_windows, sample_rate):
 def batch_process_audio_files(paths, sample_rate, window_size, step_size, batch_size):
     all_windows = []
     all_labels = []
+    file_mapping = []  # Abnormal data file tracking
     overlap_audio = np.array([])
-
+    
     for label, path in paths.items():
-        print(f"Processing path for label '{label}': {path}")  # Debug print to check the path
-        if not os.path.exists(path):
-            logging.error(f"Directory does not exist: {path}")
-            continue  # Skip this iteration if path doesn't exist
-
         file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
         for i in range(0, len(file_paths), batch_size):
             batch_files = file_paths[i:i + batch_size]
             windows, temp_labels, overlap_audio = process_batch(batch_files, label, sample_rate, window_size, step_size, overlap_audio)
             all_windows.extend(windows)
             all_labels.extend(temp_labels)
+            # Track file origin for abnormal data only
+            if label == 'abnormal':
+                file_mapping.extend([os.path.basename(batch_files[j]) for j in range(len(batch_files))] * len(windows))
+    
+    return np.array(all_windows), np.array(all_labels), file_mapping if paths.get('abnormal') else None
 
-    return np.array(all_windows), np.array(all_labels)
 
 def process_batch(file_paths, label, sample_rate, window_size, step_size, overlap_audio):
     batch_audio = overlap_audio
@@ -163,10 +197,43 @@ def simplified_autoencoder_with_lstm(timesteps, n_features, lstm_neurons):
     autoencoder.compile(optimizer='adam', loss='mean_squared_error')
     return autoencoder
 
-def model_evaluation(autoencoder, X_test, evaluation_directory, model_type):
+def model_evaluation(autoencoder, X_test, file_mapping, evaluation_directory, model_type):
     # Generate predictions for the test set
     reconstructed_test = autoencoder.predict(X_test)
     mse_test = np.mean(np.power(X_test - reconstructed_test, 2), axis=(1, 2))
+    
+    if file_mapping:
+            aggregation_level = determine_aggregation_level(file_mapping)
+            aggregated_mse = {}
+            
+            for i, mse in enumerate(mse_test):
+                datetime_obj = parse_filename_datetime(file_mapping[i])
+                if aggregation_level == 'day':
+                    key = datetime_obj.strftime('%Y-%m-%d')
+                else:  # aggregation_level == 'hour'
+                    key = datetime_obj.strftime('%Y-%m-%d-h%H')
+                
+                if key in aggregated_mse:
+                    aggregated_mse[key].append(mse)
+                else:
+                    aggregated_mse[key] = [mse]
+            
+            # Calculate average MSE for each aggregation key
+            avg_mse = {k: np.mean(v) for k, v in aggregated_mse.items()}
+            
+            # Plotting
+            plt.figure(figsize=(15, 6))
+            plt.bar(avg_mse.keys(), avg_mse.values(), color='red')
+            plt.xticks(rotation=90)
+            plt.xlabel('Aggregation Key')
+            plt.ylabel('Average MSE')
+            title = 'Average MSE per ' + ('Day' if aggregation_level == 'day' else 'Hour')
+            plt.title(title)
+            plt.tight_layout()
+            plt.savefig(os.path.join(evaluation_directory, f'{title.lower().replace(" ", "_")}_{model_type}.png'))
+            plt.close()
+    else:
+            print("File mapping not provided or not applicable.")
     
     # Plot MSE distribution for the test set
     plt.figure(figsize=(10, 6))
@@ -194,55 +261,37 @@ def model_evaluation(autoencoder, X_test, evaluation_directory, model_type):
     except Exception as e:
         logging.error(f"Failed to save the model. Error: {str(e)}")
 
-# Utility Functions
-def create_model_directory(root_path, window_size, step_size, lstm_neurons, epochs, batch_size):
-    model_directory = os.path.join(root_path, f"model_ws{window_size}_ss{step_size}_ln{lstm_neurons}_e{epochs}_bs{batch_size}")
-    if not os.path.exists(model_directory):
-        os.makedirs(model_directory)
-    return model_directory
 
-def parse_date_time_from_filename(filename):
-    parts = filename.split('_')
-    date_part = parts[1]
-    time_part = parts[2].split('.')[0]
-    date_time_obj = datetime.strptime(f'{date_part} {time_part}', '%Y-%m-%d %H-%M-%S')
-    return date_time_obj
 
 def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal_data_path, config_list, use_lstm=True):
     global SAMPLE_RATE
     for config in config_list:
         window_size, step_size, lstm_neurons, epochs, batch_size = config
 
-        # Processing normal audio for training
-        paths = {
-            'normal': normal_data_path,
-            'abnormal': abnormal_data_path
-        } 
-         
-        windows, labels = batch_process_audio_files(paths, SAMPLE_RATE, window_size, step_size, batch_size)
+        paths = {'normal': normal_data_path}
+        # Process only normal data for training
+        windows, labels, _ = batch_process_audio_files(paths, SAMPLE_RATE, window_size, step_size, batch_size)
         features = extract_features(windows, SAMPLE_RATE)
-        X_train_reshaped, X_val_reshaped, y_train, y_val = prepare_data(features, labels)
-        
+        X_train_reshaped, _, y_train, _ = prepare_data(features, labels)
+
+        # Process only abnormal data for testing
+        abnormal_paths = {'abnormal': abnormal_data_path}
+        test_windows, test_labels, abnormal_file_mapping = batch_process_audio_files(abnormal_paths, SAMPLE_RATE, window_size, step_size, batch_size)
+        X_test_reshaped, _, _, _ = prepare_data(extract_features(test_windows, SAMPLE_RATE), test_labels)
+
         # Model training
-        model_directory = create_model_directory(root_path, window_size, step_size, lstm_neurons, epochs, batch_size)
-        if use_lstm:
-            autoencoder = simplified_autoencoder_with_lstm(X_train_reshaped.shape[1], X_train_reshaped.shape[2], lstm_neurons)
-            autoencoder.fit(X_train_reshaped, X_train_reshaped, epochs=epochs, batch_size=batch_size, validation_data=(X_val_reshaped, X_val_reshaped), callbacks=[EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)], verbose=1)
+        autoencoder = simplified_autoencoder_with_lstm(1, X_train_reshaped.shape[-1], lstm_neurons)
+        autoencoder.fit(X_train_reshaped, X_train_reshaped, epochs=epochs, batch_size=batch_size, validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)])
         
-        # Processing abnormal audio for testing
-        test_windows, _ = batch_process_audio_files(paths, SAMPLE_RATE, window_size, step_size, batch_size)
-        test_features = extract_features(test_windows, SAMPLE_RATE)
-        X_test_reshaped, _, _, _ = prepare_data(test_features, np.zeros(len(test_features)))  # Labels not used for anomaly detection
-        
-        # Model evaluation on abnormal audio
-        model_evaluation(autoencoder, X_test_reshaped, evaluation_path, 'lstm')  
-        
+        # Evaluate model on abnormal dataset
+        model_evaluation(autoencoder, X_test_reshaped, abnormal_file_mapping, evaluation_path, 'lstm_autoencoder')
+                
 if __name__ == "__main__":
     try:
         root_path = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE"
         normal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset"
         abnormal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset"
-        storage_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files'
+        storage_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug'
         print(f'current_directory : {os.getcwd()}')
         if os.path.exists(normal_data_path):
             print("It existssssss")
