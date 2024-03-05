@@ -116,34 +116,32 @@ def extract_features(audio_windows, sample_rate):
     return np.array(features)
 
 # Audio Processing and Windowing for Batch Processing.
-def batch_process_audio_files(paths, sample_rate, window_size, step_size, batch_size):
+def batch_process_audio_files(paths, sample_rate, window_size, step_size, batch_size, file_limit=None):
+    all_windows = []
+    all_labels = []
+    file_mapping = []  # Abnormal data file tracking
     overlap_audio = np.array([])
     
     for label, path in paths.items():
+        # List all .wav files in the directory
         file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
+        
+        # If file_limit is specified, slice the list up to file_limit
+        if file_limit is not None:
+            file_paths = file_paths[:file_limit]
+        
         for i in range(0, len(file_paths), batch_size):
             batch_files = file_paths[i:i + batch_size]
-            windows, temp_labels, overlap_audio, file_origins = process_batch_with_tracking(batch_files, label, sample_rate, window_size, step_size, overlap_audio)
-            # Yield windows, labels, and origins for each batch
-            yield np.array(windows), np.array(temp_labels), file_origins
-
-def process_batch_with_tracking(file_paths, label, sample_rate, window_size, step_size, overlap_audio):
-    batch_audio = overlap_audio
-    file_origins = []  # Track the origin file for each window
-    for file_path in file_paths:
-        try:
-            audio, _ = librosa.load(file_path, sr=sample_rate)
-            batch_audio = np.concatenate((batch_audio, audio))
-            # Assuming all windows from this file have the same label
-            file_origins.extend([os.path.basename(file_path)] * int(len(audio) / (window_size * sample_rate)))
-        except Exception as e:
-            logging.error(f"Error loading {file_path}: {str(e)}")
-            continue
-    windows, overlap_audio = sliding_window(batch_audio, window_size, step_size, sample_rate)
-    labels = [label] * len(windows)
-    # Adjust the length of file_origins to match the number of windows
-    file_origins = file_origins[:len(windows)]
-    return windows, labels, overlap_audio, file_origins
+            windows, temp_labels, overlap_audio = process_batch(batch_files, label, sample_rate, window_size, step_size, overlap_audio)
+            all_windows.extend(windows)
+            all_labels.extend(temp_labels)
+            
+            # Track file origin for abnormal data only
+            if label == 'abnormal':
+                file_mapping.extend([os.path.basename(batch_files[j]) for j in range(len(batch_files))] * len(windows))
+    
+    return np.array(all_windows), np.array(all_labels), file_mapping if paths.get('abnormal') else None
+    
 
 def process_batch(file_paths, label, sample_rate, window_size, step_size, overlap_audio):
     batch_audio = overlap_audio
@@ -210,64 +208,75 @@ def simplified_autoencoder_with_lstm(timesteps, n_features, lstm_neurons):
     return autoencoder
 
 def model_evaluation(autoencoder, X_test, file_mapping, evaluation_directory, model_type):
+    # Generate predictions for the test set
     reconstructed_test = autoencoder.predict(X_test)
     mse_test = np.mean(np.power(X_test - reconstructed_test, 2), axis=(1, 2))
-
-    # Determine anomaly threshold and identify anomalies
-    threshold = np.percentile(mse_test, 95)
-    anomalies = mse_test > threshold
-    logging.info(f"Detected {np.sum(anomalies)} anomalies out of {len(X_test)} windows, based on threshold {threshold}.")
+    
+    # 
+    min_threshold = min(mse_test)  # minimum MSE value
+    max_threshold = max(mse_test)  # maximum MSE value
+    threshold_range = np.linspace(min_threshold, max_threshold, 10)  # Adjust the number of points as needed`
+    anomalies_count = count_anomalies(mse_test, threshold_range)
+    
+    plt.figure(figsize=(10, 6))
+    plt.plot(threshold_range, anomalies_count, marker='o', linestyle='-')
+    plt.xlabel('Threshold Value')
+    plt.ylabel('Number of Anomalies Detected')
+    plt.title('Number of Anomalies Detected vs. Threshold Value')
+    plt.grid(True)
+    plt.savefig(os.path.join(evaluation_directory, f'anomalies_vs_threshold_{model_type}.png'))
+    plt.close()
     
     if file_mapping:
-        # Aggregation of MSE by time (day or hour)
-        aggregation_level = determine_aggregation_level(file_mapping)
-        aggregated_mse = {}
-
-        for i, mse in enumerate(mse_test):
-            datetime_obj = parse_filename_datetime(file_mapping[i])
-            if aggregation_level == 'day':
-                key = datetime_obj.strftime('%Y-%m-%d')
-            else:  # aggregation_level == 'hour'
-                key = datetime_obj.strftime('%Y-%m-%d-h%H')
-
-            if key in aggregated_mse:
-                aggregated_mse[key].append(mse)
-            else:
-                aggregated_mse[key] = [mse]
-
-        # Calculate average MSE for each aggregation key
-        avg_mse = {k: np.mean(v) for k, v in aggregated_mse.items()}
-
-        # Plotting average MSE by day or hour
-        plt.figure(figsize=(15, 6))
-        plt.bar(avg_mse.keys(), avg_mse.values(), color='red')
-        plt.xticks(rotation=90)
-        plt.xlabel('Aggregation Key')
-        plt.ylabel('Average MSE')
-        title = 'Average MSE per ' + ('Day' if aggregation_level == 'day' else 'Hour')
-        plt.title(title)
-        plt.tight_layout()
-        plt.savefig(os.path.join(evaluation_directory, f'{title.lower().replace(" ", "_")}_{model_type}.png'))
-        plt.close()
+            aggregation_level = determine_aggregation_level(file_mapping)
+            aggregated_mse = {}
+            
+            for i, mse in enumerate(mse_test):
+                datetime_obj = parse_filename_datetime(file_mapping[i])
+                if aggregation_level == 'day':
+                    key = datetime_obj.strftime('%Y-%m-%d')
+                else:  # aggregation_level == 'hour'
+                    key = datetime_obj.strftime('%Y-%m-%d-h%H')
+                
+                if key in aggregated_mse:
+                    aggregated_mse[key].append(mse)
+                else:
+                    aggregated_mse[key] = [mse]
+            
+            # Calculate average MSE for each aggregation key
+            avg_mse = {k: np.mean(v) for k, v in aggregated_mse.items()}
+            
+            # Plotting
+            plt.figure(figsize=(15, 6))
+            plt.bar(avg_mse.keys(), avg_mse.values(), color='red')
+            plt.xticks(rotation=90)
+            plt.xlabel('Aggregation Key')
+            plt.ylabel('Average MSE')
+            title = 'Average MSE per ' + ('Day' if aggregation_level == 'day' else 'Hour')
+            plt.title(title)
+            plt.tight_layout()
+            plt.savefig(os.path.join(evaluation_directory, f'{title.lower().replace(" ", "_")}_{model_type}.png'))
+            plt.close()
     else:
-        print("File mapping not provided or not applicable.")
-        
-    # Utilize file_mapping for detailed anomaly analysis
-    anomaly_file_mappings = [file_mapping[i] for i in range(len(file_mapping)) if anomalies[i]]
+            print("File mapping not provided or not applicable.")
     
-    # Example of logging detailed anomaly information
-    unique_anomalous_files = set(anomaly_file_mappings)
-    logging.info(f"Unique files with anomalies: {unique_anomalous_files}")
-
-    # Visualizations and saving results (MSE distribution as an example)
+    # Plot MSE distribution for the test set
     plt.figure(figsize=(10, 6))
     plt.hist(mse_test, bins=50, color='blue', alpha=0.7, label='Test MSE')
     plt.xlabel("Mean Squared Error")
     plt.ylabel("Frequency")
-    plt.title("Distribution of MSE on Test Data")
+    plt.title("Distribution of MSE on Abnormal Test Data")
     plt.legend()
     plt.savefig(os.path.join(evaluation_directory, f'mse_distribution_{model_type}.png'))
     plt.close()
+
+    # An anomaly threshold (95th percentile of MSE)
+    threshold = np.percentile(mse_test, 95)
+    
+    # Identify anomalies (where MSE exceeds the threshold)
+    anomalies = mse_test > threshold
+    num_anomalies = np.sum(anomalies)
+    logging.info(f"Detected {num_anomalies} anomalies out of {len(X_test)} windows, based on threshold {threshold}")
 
     # Save the model
     model_save_path = os.path.join(evaluation_directory, f'{model_type}_model.h5')
@@ -276,61 +285,40 @@ def model_evaluation(autoencoder, X_test, file_mapping, evaluation_directory, mo
         logging.info(f"Model saved to {model_save_path}")
     except Exception as e:
         logging.error(f"Failed to save the model. Error: {str(e)}")
-        
-        
-def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal_data_path, config_list, use_lstm=True):
+
+def hyperparameter_tuning(root_path, evaluation_path, normal_data_path, abnormal_data_path, config_list, use_lstm=True, train_file_limit=None, test_file_limit=None):
     global SAMPLE_RATE
     for config in config_list:
         window_size, step_size, lstm_neurons, epochs, batch_size = config
 
-        # Model directory for saving models and evaluations
-        model_directory = create_model_directory(root_path, window_size, step_size, lstm_neurons, epochs, batch_size)
+        paths = {'normal': normal_data_path}
+        # Process only normal data for training
+        windows, labels, _ = batch_process_audio_files(paths, SAMPLE_RATE, window_size, step_size, batch_size,file_limit=train_file_limit)
+        features = extract_features(windows, SAMPLE_RATE)
+        X_train_reshaped, _, y_train, _ = prepare_data(features, labels)
 
-        # Accumulate features and labels for all batches
-        accumulated_features, accumulated_labels = [], []
+        # Process only abnormal data for testing
+        abnormal_paths = {'abnormal': abnormal_data_path}
+        test_windows, test_labels, abnormal_file_mapping = batch_process_audio_files(abnormal_paths, SAMPLE_RATE, window_size, step_size, batch_size,file_limit=test_file_limit)
+        X_test_reshaped, _, _, _ = prepare_data(extract_features(test_windows, SAMPLE_RATE), test_labels)
 
-        # Process normal data for training in batches
-        normal_paths = {'normal': normal_data_path}
-        for windows, labels, _ in batch_process_audio_files(normal_paths, SAMPLE_RATE, window_size, step_size, batch_size):
-            features = extract_features(windows, SAMPLE_RATE)
-            accumulated_features.extend(features)
-            accumulated_labels.extend(labels)
-
-        # Prepare data for model input
-        X_train_reshaped, _, y_train, _ = prepare_data(np.array(accumulated_features), np.array(accumulated_labels))
-
-        # Train the model
+        # Model training
         autoencoder = simplified_autoencoder_with_lstm(1, X_train_reshaped.shape[-1], lstm_neurons)
         autoencoder.fit(X_train_reshaped, X_train_reshaped, epochs=epochs, batch_size=batch_size, validation_split=0.2, callbacks=[EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)])
-
-        # Reset for abnormal data processing
-        accumulated_features, accumulated_labels, all_file_mappings = [], [], []
-
-        # Process abnormal data for testing in batches
-        abnormal_paths = {'abnormal': abnormal_data_path}
-        for test_windows, test_labels, file_mapping in batch_process_audio_files(abnormal_paths, SAMPLE_RATE, window_size, step_size, batch_size):
-            test_features = extract_features(test_windows, SAMPLE_RATE)
-            accumulated_features.extend(test_features)
-            accumulated_labels.extend(test_labels)
-            all_file_mappings.extend(file_mapping)
-
-        # Prepare test data for model evaluation
-        X_test_reshaped, _, _, _ = prepare_data(np.array(accumulated_features), np.array(accumulated_labels))
-
-        # Evaluate the model using accumulated abnormal data and file mappings
-        model_evaluation(autoencoder, X_test_reshaped, all_file_mappings, evaluation_directory=model_directory, model_type='lstm_autoencoder')                
-
+        
+        # Evaluate model on abnormal dataset
+        model_evaluation(autoencoder, X_test_reshaped, abnormal_file_mapping, evaluation_path, 'lstm_autoencoder')
+                
 if __name__ == "__main__":
     try:
         root_path = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE"
-        normal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset"
-        abnormal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset"
-        storage_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3'
-        print(f'current_directory : {os.getcwd()}')
-        if os.path.exists(normal_data_path):
-            print("It existssssss")
+        normal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_superset"
+        abnormal_data_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_superset"
+        storage_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2'
+        train_file_limit=100
+        test_train_limit=60
         config_list = [(10, 5, 32, 50, 32), (15, 7, 64, 100, 64) ]        # Hyperparameter Configurations [Window, Steps, LSTM , Epochs, Batch Size(for the audio files.)]
-        hyperparameter_tuning(root_path, storage_path, normal_data_path, abnormal_data_path, config_list, use_lstm=True)
+        hyperparameter_tuning(root_path, storage_path, normal_data_path, abnormal_data_path, config_list, use_lstm=True,train_file_limit=train_file_limit,test_file_limit=test_train_limit)
 
     except Exception as e:
         logging.error("An error occurred in the main script", exc_info=True)
