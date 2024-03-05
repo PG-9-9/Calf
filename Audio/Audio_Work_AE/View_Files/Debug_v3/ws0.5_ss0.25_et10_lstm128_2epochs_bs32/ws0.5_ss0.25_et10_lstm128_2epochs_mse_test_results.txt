@@ -1,1 +1,1 @@
-Average MSE: 2864134.5
+Average MSE: 2864027.75

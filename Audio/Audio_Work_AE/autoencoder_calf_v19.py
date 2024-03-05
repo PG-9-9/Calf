@@ -148,10 +148,31 @@ def model_evaluation(model, test_dataset, evaluation_directory, combination):
         file.write(f"Average MSE: {average_mse}\n")
 
     logging.info(f"MSE results saved to {mse_filename}")
+    
+def evaluate_anomalies_on_test_dataset(model, test_dataset, threshold, consecutive_anomaly_limit, expected_timesteps, total_features):
+    for batch, (features, labels) in enumerate(test_dataset):
+        predictions = model.predict(features)
+        mse_batch = np.mean(np.square(features.numpy() - predictions), axis=(1, 2))
+
+        #  counters for anomalies
+        consecutive_anomalies = 0
+        file_is_anomalous = False
+
+        for mse in mse_batch:
+            if mse > threshold:
+                consecutive_anomalies += 1
+                if consecutive_anomalies >= consecutive_anomaly_limit:
+                    file_is_anomalous = True
+                    break  # Stop checking if current file is already flagged as anomalous
+            else:
+                consecutive_anomalies = 0  # Reset if a non-anomalous window is found
+
+        logging.info(f"File {batch + 1} is {'anomalous' if file_is_anomalous else 'normal'} based on reconstruction error.")
 
 def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, hyperparameters_combinations):
     abnormal_path = paths['abnormal']  # Path to the abnormal data
-
+    threshold = 0.01  
+    consecutive_anomaly_limit = 5  
     for combination in hyperparameters_combinations:
         # Hyperparameter extraction
         window_size = combination["window_size"]
@@ -186,12 +207,13 @@ def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, h
 
         # Evaluate the model on the abnormal test dataset
         model_evaluation(autoencoder, test_dataset, model_save_dir, combination)
+        evaluate_anomalies_on_test_dataset(autoencoder, test_dataset, threshold, consecutive_anomaly_limit, expected_timesteps, TOTAL_FEATURES)
 
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     paths = {
-        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_superset',
-        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_superset'
+        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset',
+        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset'
     }
     hyperparameter_tuning(root_path, paths, SAMPLE_RATE, evaluation_directory, hyperparameters_combinations)
 
