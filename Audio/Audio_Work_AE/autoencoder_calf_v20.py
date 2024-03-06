@@ -21,7 +21,9 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 # Constants
 SAMPLE_RATE = 44100
 TOTAL_FEATURES = 23
-hyperparameters_combinations = [{"window_size_seconds": 7, "step_size_seconds": 3.5, "lstm_neurons": 64, "epochs": 20, "batch_size": 5}]
+hyperparameters_combinations = [
+    {"window_size": 0.5, "step_size": 0.25, "expected_timesteps": 10, "lstm_neurons": 128, "epochs":2,"batch_size":2},
+]
 
 # Utility Functions
 def create_model_directory(root_path, config):
@@ -32,17 +34,6 @@ def create_model_directory(root_path, config):
 def load_audio_file(file_path, sample_rate=SAMPLE_RATE):
     audio, _ = librosa.load(file_path, sr=sample_rate)
     return audio
-
-def load_and_concatenate_audio_files(file_paths, sample_rate):
-    audio_streams = [load_audio_file(file_path, sample_rate) for file_path in file_paths]
-    concatenated_stream = np.concatenate(audio_streams)
-    return concatenated_stream
-
-def calculate_expected_timesteps(window_size_seconds, step_size_seconds, total_audio_duration_seconds, sample_rate):
-    window_size_samples = int(window_size_seconds * sample_rate)
-    step_size_samples = int(step_size_seconds * sample_rate)
-    total_duration_samples = int(total_audio_duration_seconds * sample_rate)
-    return (total_duration_samples - window_size_samples) // step_size_samples + 1
 
 # Feature Extraction:
 def extract_spectral_features(audio, sample_rate):# Spectral Features 
@@ -85,61 +76,33 @@ def sliding_window(audio, window_size, step_size, sample_rate):
         windows.append(window)
     return windows
 
-def modified_audio_data_generator(paths, sample_rate, window_size_seconds, step_size_seconds, total_features, batch_size, expected_timesteps):
-    window_size_samples = int(window_size_seconds * sample_rate)
-    step_size_samples = int(step_size_seconds * sample_rate)
-    
+def audio_data_generator(paths, sample_rate, window_size, step_size, expected_timesteps, total_features):
     def generator():
-        file_paths = [os.path.join(paths[label], filename) for label in paths for filename in os.listdir(paths[label]) if filename.endswith('.wav')]
-        batch_count = 0
-        while batch_count * batch_size < len(file_paths):  # Ensure processing continues until all files are used
-            start_index = batch_count * batch_size
-            end_index = start_index + batch_size
-            batch_file_paths = file_paths[start_index:end_index]
-            batch_audio_data = []
-            for fp in batch_file_paths:
-                audio = load_audio_file(fp, sample_rate)
-                batch_audio_data.append(audio)
-            concatenated_audio = np.concatenate(batch_audio_data, axis=0)
-            
-            # Apply sliding window
-            windows = []
-            for start in range(0, len(concatenated_audio) - window_size_samples + 1, step_size_samples):
-                end = start + window_size_samples
-                window = concatenated_audio[start:end]
-                windows.append(window)
-            
-            # Extract features for each window
-            features = np.array([extract_features(window, sample_rate) for window in windows])
-            
-            # Check and adjust the shape of the features to match expected_timesteps if necessary
-            if features.shape[0] < expected_timesteps:
-                # Pad the features if there are fewer windows than expected
-                padding = np.zeros((expected_timesteps - features.shape[0], total_features))
-                features = np.vstack((features, padding))
-            elif features.shape[0] > expected_timesteps:
-                # Truncate features if there are more windows than expected
-                features = features[:expected_timesteps, :]
-            
-            features = features.reshape(-1, expected_timesteps, total_features)  # Reshape for the expected model input
-            yield features, features  # Yielding features as both inputs and targets for an autoencoder
-            
-            batch_count += 1
-
+        for label, path in paths.items():
+            concatenated_audio = np.array([])
+            for filename in os.listdir(path):
+                if filename.endswith('.wav'):
+                    file_path = os.path.join(path, filename)
+                    audio = load_audio_file(file_path, sample_rate)
+                    concatenated_audio = np.concatenate((concatenated_audio, audio)) if concatenated_audio.size else audio
+            windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
+            if len(windows) >= expected_timesteps:
+                features = [extract_features(window, sample_rate) for window in windows[:expected_timesteps]]
+                features = np.stack(features)  # (EXPECTED_TIMESTEPS, TOTAL_FEATURES)
+                yield features, features
     return generator
 
-def create_modified_tf_dataset(paths, sample_rate, window_size_seconds, step_size_seconds, total_features, batch_size, expected_timesteps):
-    # Create a dataset using the generator
+def create_tf_dataset(paths, sample_rate, window_size, step_size, expected_timesteps, total_features, batch_size=32):
     dataset = tf.data.Dataset.from_generator(
-        generator=lambda: modified_audio_data_generator(paths, sample_rate, window_size_seconds, step_size_seconds, total_features, batch_size, expected_timesteps),
+        generator=audio_data_generator(paths, sample_rate, window_size, step_size, expected_timesteps, total_features),
         output_signature=(
-            tf.TensorSpec(shape=(None, expected_timesteps, total_features), dtype=tf.float32),
-            tf.TensorSpec(shape=(None, expected_timesteps, total_features), dtype=tf.float32)
+            tf.TensorSpec(shape=(expected_timesteps, total_features), dtype=tf.float32),
+            tf.TensorSpec(shape=(expected_timesteps, total_features), dtype=tf.float32),
         )
     )
-    return dataset.prefetch(tf.data.AUTOTUNE)
+    return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
-def build_autoencoder(expected_timesteps,total_features, lstm_neurons):
+def build_autoencoder(expected_timesteps, total_features, lstm_neurons):  
     input_shape = (expected_timesteps, total_features)
     input_layer = Input(shape=input_shape)
 
@@ -147,23 +110,26 @@ def build_autoencoder(expected_timesteps,total_features, lstm_neurons):
     x = Conv1D(filters=32, kernel_size=3, padding='same')(input_layer)
     x = BatchNormalization()(x)
     x = Activation('relu')(x)
+    
     x = LSTM(lstm_neurons, return_sequences=True)(x)
     x = Bidirectional(LSTM(int(lstm_neurons/2), return_sequences=False))(x)
-
+    
     # Bottleneck
-    x = RepeatVector(input_shape[0])(x)
-
+    x = RepeatVector(expected_timesteps)(x)
+    
     # Decoder
     x = Bidirectional(LSTM(int(lstm_neurons/2), return_sequences=True))(x)
     x = LSTM(lstm_neurons, return_sequences=True)(x)
+    
     x = Conv1D(filters=32, kernel_size=3, padding='same')(x)
     x = BatchNormalization()(x)
     x = Activation('relu')(x)
-    output_layer = TimeDistributed(Dense(input_shape[1]))(x)
-
+    
+    output_layer = TimeDistributed(Dense(total_features))(x)
+    
     autoencoder = Model(input_layer, output_layer)
     autoencoder.compile(optimizer='adam', loss='mse')
-
+    
     return autoencoder
 
 def model_evaluation(model, test_dataset, evaluation_directory, combination):
@@ -186,51 +152,48 @@ def model_evaluation(model, test_dataset, evaluation_directory, combination):
     logging.info(f"MSE results saved to {mse_filename}")
 
 def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, hyperparameters_combinations):
+    abnormal_path = paths['abnormal']  # Path to the abnormal data
+
     for combination in hyperparameters_combinations:
-        window_size_seconds = combination["window_size_seconds"]
-        step_size_seconds = combination["step_size_seconds"]
-        batch_size = combination["batch_size"]
+        # Hyperparameter extraction
+        window_size = combination["window_size"]
+        step_size = combination["step_size"]
+        expected_timesteps = combination["expected_timesteps"]
         lstm_neurons = combination["lstm_neurons"]
         epochs = combination["epochs"]
+        batch_size = combination["batch_size"]  
 
-        # Calculate total_audio_duration_seconds based on batch_size and the length of each audio file
-        total_audio_duration_seconds = 60 * batch_size  # Assuming each audio file is 1 minute long
-        expected_timesteps = calculate_expected_timesteps(window_size_seconds, step_size_seconds, total_audio_duration_seconds, sample_rate)
-        
-        # Log the calculated expected timesteps for debugging
-        logging.info(f"Calculated expected timesteps: {expected_timesteps}")
+        dataset_dirname = f"ws{window_size}_ss{step_size}_et{expected_timesteps}_lstm{lstm_neurons}_{epochs}epochs_bs{batch_size}"
+        model_save_dir = os.path.join(evaluation_directory, dataset_dirname)
+        os.makedirs(model_save_dir, exist_ok=True)
 
-        # Adjust the creation of the training dataset to use the calculated expected_timesteps
-        train_dataset = create_modified_tf_dataset(paths, sample_rate, window_size_seconds, step_size_seconds, TOTAL_FEATURES, batch_size, expected_timesteps)
+        # Create training dataset
+        train_dataset = create_tf_dataset(
+            paths, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
+        )
 
-        # Now build the autoencoder model using the calculated expected_timesteps
+        # Build and train the model
         autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons)
-
-        # Train the autoencoder
-        logging.info("Starting training...")
         autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3)])
         
-        # Save the trained model
-        model_save_dir = os.path.join(evaluation_directory, f"model_ws{window_size_seconds}_ss{step_size_seconds}_ln{lstm_neurons}_ep{epochs}_bs{batch_size}")
-        if not os.path.exists(model_save_dir):
-            os.makedirs(model_save_dir)
+        # Save the model
         model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
         autoencoder.save(model_path)
         logging.info(f"Model saved to {model_path}")
 
         # Create test dataset using abnormal data
-        # test_dataset = create_modified_tf_dataset(
-        #     {'abnormal': abnormal_path}, sample_rate, window_size, step_size, TOTAL_FEATURES, batch_size # Batch_size
-        # )
+        test_dataset = create_tf_dataset(
+            {'abnormal': abnormal_path}, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
+        )
 
         # Evaluate the model on the abnormal test dataset
-        # model_evaluation(autoencoder, test_dataset, model_save_dir, combination)
+        model_evaluation(autoencoder, test_dataset, model_save_dir, combination)
 
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     paths = {
-        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset',
-        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset'
+        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_superset',
+        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_superset'
     }
     hyperparameter_tuning(root_path, paths, SAMPLE_RATE, evaluation_directory, hyperparameters_combinations)
 
