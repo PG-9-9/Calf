@@ -115,16 +115,18 @@ def create_tf_dataset(paths, sample_rate, window_size, step_size, expected_times
     )
     return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
 
-def concatenated_features_generator(test_files, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
-    """Yields concatenated features from n_files_per_batch audio files."""
-    for i in range(0, len(test_files), n_files_per_batch):
-        batch_files = test_files[i:i + n_files_per_batch]
+def dynamic_test_files_generator(directory_path, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
+    files = [os.path.join(directory_path, f) for f in os.listdir(directory_path) if f.endswith('.wav')]
+    files.sort()  # Should check for training
+    
+    for i in range(0, len(files), n_files_per_batch):
+        batch_files = files[i:i + n_files_per_batch]
         concatenated_audio = np.array([])
-        
+
         for file_path in batch_files:
             audio = load_audio_file(file_path, sample_rate)
             concatenated_audio = np.concatenate((concatenated_audio, audio))
-        
+
         windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
         batch_features = []
         for start in range(0, len(windows) - expected_timesteps + 1, expected_timesteps):
@@ -136,24 +138,29 @@ def concatenated_features_generator(test_files, sample_rate, window_size, step_s
         if batch_features:
             yield np.array(batch_features)
 
-def create_evaluation_dataset(generator, output_shapes, output_types=tf.float32, batch_size=None):
-    dataset = tf.data.Dataset.from_generator(
-        generator,
-        output_types=output_types,
-        output_shapes=output_shapes
+def create_evaluation_dataset_from_directory(directory_path, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
+    generator = lambda: dynamic_test_files_generator(
+        directory_path, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch
     )
-    if batch_size:
-        dataset = dataset.batch(batch_size)
-    return dataset.prefetch(tf.data.AUTOTUNE)
+    return tf.data.Dataset.from_generator(
+        generator,
+        output_signature=tf.TensorSpec(shape=(None, expected_timesteps, total_features), dtype=tf.float32)
+    ).prefetch(tf.data.AUTOTUNE)
+
 
 def evaluate_model(model, dataset):
     all_batch_mse = []
+    batch_number = 0  # Initialize batch counter
+    
     for batch_features in dataset:
         reconstructed = model.predict(batch_features)
         mse = np.mean(np.square(batch_features - reconstructed), axis=(1, 2))
         batch_mse = np.mean(mse)
         all_batch_mse.append(batch_mse)
-        print(f"Batch MSE: {batch_mse}")
+        
+        print(f"Batch #{batch_number} MSE: {batch_mse}")
+        
+        batch_number += 1  
     
     overall_mse = np.mean(all_batch_mse)
     print(f"Overall MSE: {overall_mse}")
@@ -180,7 +187,7 @@ def test_model(test_files, model, sample_rate, window_size, step_size, expected_
     # Model prediction
     reconstructed_features = model.predict(test_features)
 
-    # Evaluate performance (e.g., MSE)
+    # Evaluate performance 
     mse = np.mean(np.square(test_features - reconstructed_features), axis=-1)
     average_mse = np.mean(mse)
 
@@ -259,22 +266,13 @@ def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, h
         test_files=['/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_superset/output_2023-10-08_16-23-35.wav']
         # mse, test_labels = test_model(test_files, autoencoder, SAMPLE_RATE, window_size, step_size, expected_timesteps, TOTAL_FEATURES)
         # Create the generator for batches of files
-        generator = lambda: concatenated_features_generator(
+        test_dataset = create_evaluation_dataset_from_directory(
             abnormal_path, SAMPLE_RATE, window_size, step_size, expected_timesteps, TOTAL_FEATURES, n_files_per_batch=2
         )
 
-        # Create TensorFlow Dataset
-        dataset = create_evaluation_dataset(
-            generator,
-            output_shapes=(None, expected_timesteps, TOTAL_FEATURES)
-        )
-
         # Evaluate the model
-        batch_mse, overall_mse = evaluate_model(autoencoder, dataset)
+        batch_mse, overall_mse = evaluate_model(autoencoder, test_dataset)
 
-
-        
-        
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     paths = {
