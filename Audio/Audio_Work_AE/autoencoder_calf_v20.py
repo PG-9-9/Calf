@@ -17,6 +17,10 @@ from tensorflow.keras.models import Model, load_model
 
 # Logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+class ResetStatesCallback(callbacks.Callback):
+    def on_epoch_begin(self, epoch, logs=None):
+        self.model.reset_states()
+
 
 # Constants
 SAMPLE_RATE = 16000
@@ -113,7 +117,7 @@ def create_tf_dataset(paths, sample_rate, window_size, step_size, expected_times
             tf.TensorSpec(shape=(expected_timesteps, total_features), dtype=tf.float32),
         )
     )
-    return dataset.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+    return dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
 
 def dynamic_test_files_generator(directory_path, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
     files = [os.path.join(directory_path, f) for f in os.listdir(directory_path) if f.endswith('.wav')]
@@ -147,7 +151,6 @@ def create_evaluation_dataset_from_directory(directory_path, sample_rate, window
         output_signature=tf.TensorSpec(shape=(None, expected_timesteps, total_features), dtype=tf.float32)
     ).prefetch(tf.data.AUTOTUNE)
 
-
 def evaluate_model(model, dataset):
     all_batch_mse = []
     batch_number = 0  # Initialize batch counter
@@ -165,61 +168,25 @@ def evaluate_model(model, dataset):
     overall_mse = np.mean(all_batch_mse)
     print(f"Overall MSE: {overall_mse}")
     return all_batch_mse, overall_mse
-   
 
-def test_model(test_files, model, sample_rate, window_size, step_size, expected_timesteps, total_features):
-    test_features = []
-    test_labels = []
+def build_autoencoder(expected_timesteps, total_features, lstm_neurons, batch_size):  
+    # Input layer adjusted for stateful LSTMs
+    input_layer = Input(batch_shape=(batch_size, expected_timesteps, total_features))
 
-    for file_path in test_files:
-        audio = load_audio_file(file_path, sample_rate)
-        windows = sliding_window(audio, window_size, step_size, sample_rate)
-        
-        for start in range(0, len(windows) - expected_timesteps + 1, expected_timesteps):
-            segment_windows = windows[start:start + expected_timesteps]
-            if len(segment_windows) == expected_timesteps:
-                features = np.array([extract_features(window, sample_rate) for window in segment_windows])
-                test_features.append(features)
-                test_labels.append(file_path)  # 
-
-    test_features = np.array(test_features)  # Shape: (num_sequences, expected_timesteps, total_features)
-    
-    # Model prediction
-    reconstructed_features = model.predict(test_features)
-
-    # Evaluate performance 
-    mse = np.mean(np.square(test_features - reconstructed_features), axis=-1)
-    average_mse = np.mean(mse)
-
-    print(f"Average MSE: {average_mse}")
-    return mse, test_labels
-
-def build_autoencoder(expected_timesteps, total_features, lstm_neurons):  
-    input_shape = (expected_timesteps, total_features)
-    input_layer = Input(shape=input_shape)
-
-    # Encoder
+    # Encoder with stateful LSTM
     x = Conv1D(filters=32, kernel_size=3, padding='same')(input_layer)
     x = BatchNormalization()(x)
     x = Activation('relu')(x)
+    x = LSTM(lstm_neurons, return_sequences=False, stateful=True)(x)  # Note the change here
     
-    x = LSTM(lstm_neurons, return_sequences=True)(x)
-    x = Bidirectional(LSTM(int(lstm_neurons/2), return_sequences=False))(x)
-    
-    # Bottleneck
+    # Replicate encoder output for decoder input
     x = RepeatVector(expected_timesteps)(x)
     
     # Decoder
-    x = Bidirectional(LSTM(int(lstm_neurons/2), return_sequences=True))(x)
-    x = LSTM(lstm_neurons, return_sequences=True)(x)
+    x = LSTM(lstm_neurons, return_sequences=True, stateful=True)(x)
+    x = TimeDistributed(Dense(total_features))(x)
     
-    x = Conv1D(filters=32, kernel_size=3, padding='same')(x)
-    x = BatchNormalization()(x)
-    x = Activation('relu')(x)
-    
-    output_layer = TimeDistributed(Dense(total_features))(x)
-    
-    autoencoder = Model(input_layer, output_layer)
+    autoencoder = Model(inputs=input_layer, outputs=x)
     autoencoder.compile(optimizer='adam', loss='mse')
     
     return autoencoder
@@ -242,19 +209,19 @@ def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, h
         model_save_dir = os.path.join(evaluation_directory, dataset_dirname)
         os.makedirs(model_save_dir, exist_ok=True)
 
-        # Create training dataset
-        # train_dataset = create_tf_dataset(
-        #     paths, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
-        # )
+        #   Create training dataset
+        train_dataset = create_tf_dataset(
+            paths, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
+        )
 
-        # Build and train the model
-        # autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons)
-        # autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3)])
+        #   Build and train the model
+        autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons,   batch_size)
+        autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3),ResetStatesCallback()])
         
-        #Save the model
-        # model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
-        # autoencoder.save(model_path)
-        # logging.info(f"Model saved to {model_path}")
+        #   Save the model
+        model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
+        autoencoder.save(model_path)
+        logging.info(f"Model saved to {model_path}")
 
         model_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3/ws7_ss3.5_et10_lstm128_1epochs_bs32/autoencoder_model.h5"
         autoencoder=load_model(model_path)
@@ -263,15 +230,12 @@ def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, h
         #     {'abnormal': abnormal_path}, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
         # )
 
-        test_files=['/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_superset/output_2023-10-08_16-23-35.wav']
-        # mse, test_labels = test_model(test_files, autoencoder, SAMPLE_RATE, window_size, step_size, expected_timesteps, TOTAL_FEATURES)
         # Create the generator for batches of files
         test_dataset = create_evaluation_dataset_from_directory(
             abnormal_path, SAMPLE_RATE, window_size, step_size, expected_timesteps, TOTAL_FEATURES, n_files_per_batch=2
         )
-
         # Evaluate the model
-        batch_mse, overall_mse = evaluate_model(autoencoder, test_dataset)
+        # batch_mse, overall_mse = evaluate_model(autoencoder, test_dataset)
 
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
