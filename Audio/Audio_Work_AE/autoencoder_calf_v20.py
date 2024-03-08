@@ -244,16 +244,16 @@ def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, h
             {'normal': normal_path}, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
         )
 
-        #Build and train the model
+        #   Build and train the model
         autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons,   batch_size)
         autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3),ResetStatesCallback()])
         
-        #Save the model
+        #   Save the model
         model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
         autoencoder.save(model_path)
         logging.info(f"Model saved to {model_path}")
         
-        #Rebuild for testing.        
+        #   Rebuild for testing.        
         new_model=rebuild_model_for_prediction(expected_timesteps,TOTAL_FEATURES,lstm_neurons)
         new_model.load_weights(model_path)
         txt_file_path=os.path.join(model_save_dir,"reconstruction_error.txt")
