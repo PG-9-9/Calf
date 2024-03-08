@@ -195,30 +195,44 @@ def test_model_on_audio_file(model_path, audio_file_path, sample_rate, window_si
     print(f"Reconstruction errors for each sequence saved to {txt_file_path}")
     
 def test_audio_data_generator(file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
-    # Generator to load and concatenate audio files, then yield sequences
     batch_audio = []
-    for i, file_path in enumerate(file_paths):
+    sequence_files = []  # To track files contributing to each sequence
+    current_files = []  # To keep track of the current batch of files being processed
+
+    for file_path in file_paths:
         audio = load_audio_file(file_path, sample_rate)
         batch_audio.append(audio)
-        # Once enough files are loaded or it's the last file, process them
-        if (i + 1) % n_files_per_batch == 0 or i == len(file_paths) - 1:
+        current_files.append(file_path.split('/')[-1])  # Assuming file_path is a full path, extract just the filename
+
+        if len(batch_audio) == n_files_per_batch:
             concatenated_audio = np.concatenate(batch_audio)
-            batch_audio = []  # Reset for the next batch
-            
             windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
             sequences = [windows[j:j + expected_timesteps] for j in range(len(windows) - expected_timesteps + 1)]
-            for sequence in sequences:
+
+            for i, sequence in enumerate(sequences):
                 features_sequence = np.array([extract_features(window, sample_rate) for window in sequence])
-                yield features_sequence.reshape(1, expected_timesteps, total_features)
+                yield features_sequence.reshape(1, expected_timesteps, total_features), ' + '.join(current_files)
+
+            batch_audio = []
+            current_files = []
+
+    if batch_audio:  # Handle the last batch
+        concatenated_audio = np.concatenate(batch_audio)
+        windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
+        sequences = [windows[j:j + expected_timesteps] for j in range(len(windows) - expected_timesteps + 1)]
+
+        for i, sequence in enumerate(sequences):
+            features_sequence = np.array([extract_features(window, sample_rate) for window in sequence])
+            yield features_sequence.reshape(1, expected_timesteps, total_features), ' + '.join(current_files)
+
 
 def predict_and_store_errors(model, file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch, output_file):
     generator = test_audio_data_generator(file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch)
     with open(output_file, 'w') as f:
-        for sequence in generator:
+        for sequence, files in generator:
             predicted_sequence = model.predict(sequence)
             error = np.mean(np.power(sequence - predicted_sequence, 2))
-            f.write(f"{error}\n")
-
+            f.write(f"{files}: {error}\n")
 
 def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, hyperparameters_combinations):
     abnormal_path = paths['abnormal']  # Path to the abnormal data
@@ -245,15 +259,18 @@ def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, h
         )
 
         #   Build and train the model
-        autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons,   batch_size)
-        autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3),ResetStatesCallback()])
+        # autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons,   batch_size)
+        # autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3),ResetStatesCallback()])
         
         #   Save the model
-        model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
-        autoencoder.save(model_path)
-        logging.info(f"Model saved to {model_path}")
+        # model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
+        # autoencoder.save(model_path)
+        # logging.info(f"Model saved to {model_path}")
+        
+        model_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3/ws7_ss3.5_et10_lstm128_1epochs_bs32/autoencoder_model.h5'
         
         #   Rebuild for testing.        
+        expected_timesteps=3
         new_model=rebuild_model_for_prediction(expected_timesteps,TOTAL_FEATURES,lstm_neurons)
         new_model.load_weights(model_path)
         txt_file_path=os.path.join(model_save_dir,"reconstruction_error.txt")
@@ -265,7 +282,7 @@ def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     paths = {
         'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset',
-        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset'
+        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/ab_test'
     }
     hyperparameter_tuning(root_path, paths, SAMPLE_RATE, evaluation_directory, hyperparameters_combinations)
 
