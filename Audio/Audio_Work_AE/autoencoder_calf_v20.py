@@ -26,15 +26,15 @@ class ResetStatesCallback(callbacks.Callback):
 # Constants
 SAMPLE_RATE = 16000
 TOTAL_FEATURES = 23
-# hyperparameters_combinations = [
-#     {"window_size": 7, "step_size": 3.5, "expected_timesteps": 10, "lstm_neurons": 128, "epochs": 20, "batch_size": 32},
-#     {"window_size": 15, "step_size": 7.5, "expected_timesteps": 10, "lstm_neurons": 256, "epochs": 20, "batch_size": 32}
-# ]
+
 hyperparameters_combinations = [
-    {"window_size": 7, "step_size": 3.5, "expected_timesteps": 10, "lstm_neurons": 128, "epochs": 1, "batch_size": 32}
+    {"window_size": 7, "step_size": 3.5, "expected_timesteps": 10, "lstm_neurons": 128, "epochs": 20, "batch_size": 32},
+    {"window_size": 15, "step_size": 2, "expected_timesteps": 5, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    {"window_size": 10, "step_size": 2.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    {"window_size": 5, "step_size": 5, "expected_timesteps": 12, "lstm_neurons": 128, "epochs": 20, "batch_size": 32},
+    {"window_size": 12.5, "step_size": 3, "expected_timesteps": 6, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
 ]
 
-# Utility Functions
 def create_model_directory(root_path, config):
     model_dir = os.path.join(root_path, "model_{}".format("_".join(map(str, config))))
     os.makedirs(model_dir, exist_ok=True)
@@ -44,7 +44,6 @@ def load_audio_file(file_path, sample_rate=SAMPLE_RATE):
     audio, _ = librosa.load(file_path, sr=sample_rate)
     return audio
 
-# Feature Extraction:
 def extract_spectral_features(audio, sample_rate):# Spectral Features 
     spectral_centroids = librosa.feature.spectral_centroid(y=audio, sr=sample_rate)[0]
     spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sample_rate)[0]
@@ -143,7 +142,6 @@ def build_autoencoder(expected_timesteps, total_features, lstm_neurons, batch_si
     return autoencoder
 
 def rebuild_model_for_prediction(expected_timesteps, total_features, lstm_neurons):
-    # Note: No batch size specified here, using None to allow flexibility.
     input_layer = Input(batch_shape=(1, expected_timesteps, total_features))
 
     # Reconstruct your model architecture here
@@ -343,35 +341,34 @@ def plot_window_granularity(data, output_dir, date):
     plt.savefig(os.path.join(output_dir, 'window', f"{date}.png"))
     plt.close()
 
-def evaluate_model(model, dataset, model_save_dir):
+def evaluate_model_and_plot_errors(model, dataset, model_save_dir):
     all_reconstruction_errors = []
-    for batch in dataset:
-        X_batch, _ = batch
+    sequence_indices = []  # To keep track of the sequence index
+
+    for i, batch in enumerate(dataset):
+        X_batch, _ = batch 
         reconstructed_batch = model.predict(X_batch)
+        # Calculate MSE for each example in the batch
         batch_errors = np.mean(np.square(X_batch - reconstructed_batch), axis=(1, 2))
         all_reconstruction_errors.extend(batch_errors)
-    
-    # Ensure there are errors to process before proceeding
+        sequence_indices.extend([i for i in range(len(batch_errors))])
+
     if len(all_reconstruction_errors) > 0:
-        val_errors = np.array(all_reconstruction_errors)
-        plt.hist(val_errors, bins=50)
-        plt.xlabel('Reconstruction error')
-        plt.ylabel('Number of examples')
-        plt.title('Distribution of reconstruction errors on the validation set')
-        print("Hi !!!!")
-        print(f'{model_save_dir} Model Distribution')
-        plt.savefig(os.path.join(model_save_dir, "validation_set_distribution.png"))
+        # Plot the reconstruction errors for each sequence
+        plt.figure(figsize=(10, 6))
+        plt.plot(sequence_indices, all_reconstruction_errors, marker='o', linestyle='-', color='blue')
+        plt.title('Reconstruction Error for Each Sequence in Validation Set')
+        plt.xlabel('Sequence Index')
+        plt.ylabel('Reconstruction Error (MSE)')
+        plt.grid(True)
+        plt.savefig(os.path.join(model_save_dir, "validation_reconstruction_errors.png"))
         plt.close()
-        
-        # Determine threshold
-        threshold = np.percentile(val_errors, 95)
-        print(f"Chosen threshold for anomaly detection: {threshold}")
+        print(f"Plot saved to {os.path.join(model_save_dir, 'validation_reconstruction_errors.png')}")
     else:
         print("No data was processed. Please check the validation dataset.")
 
-
 def experiment_with_configurations(root_path, paths, sample_rate, evaluation_directory, hyperparameters_combinations):
-    abnormal_path = paths['abnormal']  # Path to the abnormal data
+    abnormal_path = paths['abnormal']  #  the abnormal data
     normal_path=paths['normal']
     validation_path=paths['validation']
     validation_files = [os.path.join(paths['validation'], f) for f in os.listdir(paths['validation']) if f.endswith('.wav')]
@@ -411,7 +408,7 @@ def experiment_with_configurations(root_path, paths, sample_rate, evaluation_dir
         
         # model_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3/ws7_ss3.5_et10_lstm128_1epochs_bs32/autoencoder_model.h5'
         # Validate the model
-        evaluate_model(autoencoder,val_dataset,model_save_dir)
+        evaluate_model_and_plot_errors(autoencoder,val_dataset,model_save_dir)
         
         #   Rebuild for testing.        
         expected_timesteps=3
@@ -429,9 +426,9 @@ def experiment_with_configurations(root_path, paths, sample_rate, evaluation_dir
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     paths = {
-        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset',
-        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/ab_test',
-        'validation':'/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset'
+        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_training_set',
+        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_set',
+        'validation':'/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'
     }
     experiment_with_configurations(root_path, paths, SAMPLE_RATE, evaluation_directory, hyperparameters_combinations)
 
