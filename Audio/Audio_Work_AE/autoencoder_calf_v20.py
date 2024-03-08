@@ -118,57 +118,7 @@ def create_tf_dataset(paths, sample_rate, window_size, step_size, expected_times
         )
     )
     return dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
-
-def dynamic_test_files_generator(directory_path, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
-    files = [os.path.join(directory_path, f) for f in os.listdir(directory_path) if f.endswith('.wav')]
-    files.sort()  # Should check for training
     
-    for i in range(0, len(files), n_files_per_batch):
-        batch_files = files[i:i + n_files_per_batch]
-        concatenated_audio = np.array([])
-
-        for file_path in batch_files:
-            audio = load_audio_file(file_path, sample_rate)
-            concatenated_audio = np.concatenate((concatenated_audio, audio))
-
-        windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
-        batch_features = []
-        for start in range(0, len(windows) - expected_timesteps + 1, expected_timesteps):
-            segment_windows = windows[start:start + expected_timesteps]
-            if len(segment_windows) == expected_timesteps:
-                features = np.array([extract_features(window, sample_rate) for window in segment_windows])
-                batch_features.append(features)
-                
-        if batch_features:
-            yield np.array(batch_features)
-
-def create_evaluation_dataset_from_directory(directory_path, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
-    generator = lambda: dynamic_test_files_generator(
-        directory_path, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch
-    )
-    return tf.data.Dataset.from_generator(
-        generator,
-        output_signature=tf.TensorSpec(shape=(None, expected_timesteps, total_features), dtype=tf.float32)
-    ).prefetch(tf.data.AUTOTUNE)
-
-def evaluate_model(model, dataset):
-    all_batch_mse = []
-    batch_number = 0  # Initialize batch counter
-    
-    for batch_features in dataset:
-        reconstructed = model.predict(batch_features)
-        mse = np.mean(np.square(batch_features - reconstructed), axis=(1, 2))
-        batch_mse = np.mean(mse)
-        all_batch_mse.append(batch_mse)
-        
-        print(f"Batch #{batch_number} MSE: {batch_mse}")
-        
-        batch_number += 1  
-    
-    overall_mse = np.mean(all_batch_mse)
-    print(f"Overall MSE: {overall_mse}")
-    return all_batch_mse, overall_mse
-
 def build_autoencoder(expected_timesteps, total_features, lstm_neurons, batch_size):  
     # Input layer adjusted for stateful LSTMs
     input_layer = Input(batch_shape=(batch_size, expected_timesteps, total_features))
@@ -191,11 +141,91 @@ def build_autoencoder(expected_timesteps, total_features, lstm_neurons, batch_si
     
     return autoencoder
 
+def rebuild_model_for_prediction(expected_timesteps, total_features, lstm_neurons):
+    # Note: No batch size specified here, using None to allow flexibility.
+    input_layer = Input(batch_shape=(1, expected_timesteps, total_features))
+
+    # Reconstruct your model architecture here
+    x = Conv1D(filters=32, kernel_size=3, padding='same')(input_layer)
+    x = BatchNormalization()(x)
+    x = Activation('relu')(x)
+    x = LSTM(lstm_neurons, return_sequences=False, stateful=True)(x)
+    
+    x = RepeatVector(expected_timesteps)(x)
+    
+    x = LSTM(lstm_neurons, return_sequences=True, stateful=True)(x)
+    x = TimeDistributed(Dense(total_features))(x)
+    
+    model = Model(inputs=input_layer, outputs=x)
+    model.compile(optimizer='adam', loss='mse')
+    
+    return model
+
+def test_model_on_audio_file(model_path, audio_file_path, sample_rate, window_size, step_size, expected_timesteps, total_features, txt_file_path):
+    # Rebuild model for prediction with batch_size=1
+    model = rebuild_model_for_prediction(expected_timesteps, total_features, lstm_neurons=128)
+    model.load_weights(model_path)
+
+    # Process the audio file and predict
+    audio = load_audio_file(audio_file_path, sample_rate)
+    windows = sliding_window(audio, window_size, step_size, sample_rate)
+    windows_features_list = [extract_features(window, sample_rate) for window in windows]
+    
+    # Ensure there's enough windows to form at least one sequence of expected_timesteps
+    if len(windows_features_list) < expected_timesteps:
+        print("Not enough data for a full sequence.")
+        return
+
+    # Organize windows into sequences
+    sequences = [windows_features_list[i:i + expected_timesteps] for i in range(0, len(windows_features_list), expected_timesteps) if len(windows_features_list[i:i + expected_timesteps]) == expected_timesteps]
+    sequences_features = np.array(sequences)
+
+    # Initialize an empty list to store reconstruction errors for each sequence
+    sequence_reconstruction_errors = []
+
+    # Predict and calculate reconstruction error for each sequence
+    for sequence in sequences_features:
+        sequence_reshaped = sequence.reshape(1, expected_timesteps, total_features)
+        predicted_sequence = model.predict(sequence_reshaped, batch_size=1)
+        sequence_error = np.mean(np.power(sequence_reshaped - predicted_sequence, 2), axis=(1, 2))
+        sequence_reconstruction_errors.extend(sequence_error)
+
+    # Save the reconstruction errors for each sequence
+    np.savetxt(txt_file_path, sequence_reconstruction_errors, fmt='%f')
+    print(f"Reconstruction errors for each sequence saved to {txt_file_path}")
+    
+def test_audio_data_generator(file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
+    # Generator to load and concatenate audio files, then yield sequences
+    batch_audio = []
+    for i, file_path in enumerate(file_paths):
+        audio = load_audio_file(file_path, sample_rate)
+        batch_audio.append(audio)
+        # Once enough files are loaded or it's the last file, process them
+        if (i + 1) % n_files_per_batch == 0 or i == len(file_paths) - 1:
+            concatenated_audio = np.concatenate(batch_audio)
+            batch_audio = []  # Reset for the next batch
+            
+            windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
+            sequences = [windows[j:j + expected_timesteps] for j in range(len(windows) - expected_timesteps + 1)]
+            for sequence in sequences:
+                features_sequence = np.array([extract_features(window, sample_rate) for window in sequence])
+                yield features_sequence.reshape(1, expected_timesteps, total_features)
+
+def predict_and_store_errors(model, file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch, output_file):
+    generator = test_audio_data_generator(file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch)
+    with open(output_file, 'w') as f:
+        for sequence in generator:
+            predicted_sequence = model.predict(sequence)
+            error = np.mean(np.power(sequence - predicted_sequence, 2))
+            f.write(f"{error}\n")
+
+
 def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, hyperparameters_combinations):
     abnormal_path = paths['abnormal']  # Path to the abnormal data
-    print(f"Type is :{type(abnormal_path)}")
-    print(abnormal_path)
-
+    normal_path=paths['normal']
+    # List of file paths
+    file_paths = [os.path.join(abnormal_path, f) for f in os.listdir(abnormal_path) if f.endswith('.wav')]
+    
     for combination in hyperparameters_combinations:
         # Hyperparameter extraction
         window_size = combination["window_size"]
@@ -211,31 +241,25 @@ def hyperparameter_tuning(root_path, paths, sample_rate, evaluation_directory, h
 
         #   Create training dataset
         train_dataset = create_tf_dataset(
-            paths, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
+            {'normal': normal_path}, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
         )
 
-        #   Build and train the model
+        #Build and train the model
         autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons,   batch_size)
         autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3),ResetStatesCallback()])
         
-        #   Save the model
+        #Save the model
         model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
         autoencoder.save(model_path)
         logging.info(f"Model saved to {model_path}")
-
-        model_path="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3/ws7_ss3.5_et10_lstm128_1epochs_bs32/autoencoder_model.h5"
-        autoencoder=load_model(model_path)
-        # Create test dataset using abnormal data
-        # test_dataset = create_tf_dataset(
-        #     {'abnormal': abnormal_path}, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
-        # )
-
-        # Create the generator for batches of files
-        test_dataset = create_evaluation_dataset_from_directory(
-            abnormal_path, SAMPLE_RATE, window_size, step_size, expected_timesteps, TOTAL_FEATURES, n_files_per_batch=2
-        )
-        # Evaluate the model
-        # batch_mse, overall_mse = evaluate_model(autoencoder, test_dataset)
+        
+        #Rebuild for testing.        
+        new_model=rebuild_model_for_prediction(expected_timesteps,TOTAL_FEATURES,lstm_neurons)
+        new_model.load_weights(model_path)
+        txt_file_path=os.path.join(model_save_dir,"reconstruction_error.txt")
+        
+        # Predict and store errors.
+        predict_and_store_errors(new_model, file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features=TOTAL_FEATURES, n_files_per_batch=5, output_file=txt_file_path)
 
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
