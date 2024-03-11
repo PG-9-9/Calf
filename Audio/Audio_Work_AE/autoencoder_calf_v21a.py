@@ -18,8 +18,8 @@ logging.basicConfig(level=logging.INFO,
 
 hyperparameters_combinations = [
     {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 20, "batch_size": 32},
-    {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
-    # {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
 ]
 
 def expected_npz_files_per_config(num_audio_files, window_size, step_size, expected_timesteps, files_to_append):
@@ -136,48 +136,58 @@ def concatenate_and_process_files(paths, sample_rate, hyperparameters, files_to_
                         
 def save_features_with_metadata(paths, sample_rate, hyperparameters, files_to_append, save_dir):
     for config in hyperparameters:
-        # Configuration-specific parameters
         window_size = config["window_size"]
         step_size = config["step_size"]
         expected_timesteps = config["expected_timesteps"]
-        lstm_neurons = config["lstm_neurons"] 
-        epochs = config["epochs"]
-        batch_size = config["batch_size"]
+        # Continue with the configuration-specific processing
 
-        dataset_dirname = f"ws{window_size}_ss{step_size}_et{expected_timesteps}_lstm{lstm_neurons}_{epochs}epochs_bs{batch_size}"
+        dataset_dirname = f"ws{window_size}_ss{step_size}_et{expected_timesteps}_lstm{config['lstm_neurons']}_{config['epochs']}epochs_bs{config['batch_size']}"
         data_save_dir = os.path.join(save_dir, dataset_dirname, 'test_data')
         os.makedirs(data_save_dir, exist_ok=True)
 
         for label, path in paths.items():
             file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
-            
+
+            # Process files in batches
             for batch_idx, file_batch in enumerate(np.array_split(file_paths, np.ceil(len(file_paths) / files_to_append))):
                 concatenated_audio = np.concatenate([load_audio_file(fp, sample_rate) for fp in file_batch if load_audio_file(fp, sample_rate) is not None], axis=0)
                 windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
+                # Track the cumulative length of audio processed to map windows to files
+                cumulative_lengths = [0] + np.cumsum([len(load_audio_file(fp, sample_rate)) for fp in file_batch if load_audio_file(fp, sample_rate) is not None]).tolist()
 
                 for i in range(0, len(windows) - expected_timesteps + 1, expected_timesteps):
                     sequence = windows[i:i + expected_timesteps]
                     if len(sequence) == expected_timesteps:
                         features = np.array([extract_features(w, sample_rate) for w in sequence])
+                        window_start_sample = i * int(step_size * sample_rate)
+                        window_end_sample = window_start_sample + expected_timesteps * int(window_size * sample_rate)
+                        
+                        # Determine which files contribute to the current window sequence
+                        contributing_files = []
+                        for j, (start, end) in enumerate(zip(cumulative_lengths[:-1], cumulative_lengths[1:])):
+                            if start < window_end_sample and end > window_start_sample:
+                                contributing_files.append(os.path.basename(file_batch[j]))
+                        
                         sequence_metadata = {
-                            "file_paths": [os.path.basename(fp) for fp in file_batch],
-                            "sequence_start": i,
-                            "sequence_end": i + expected_timesteps
+                            "file_paths": contributing_files,
+                            "sequence_start": window_start_sample / sample_rate,
+                            "sequence_end": window_end_sample / sample_rate
                         }
-                        # Constructing the npz file name with additional metadata information
+
                         save_path = os.path.join(data_save_dir, f"{label}_config{config['window_size']}_batch{batch_idx}_seq{i}.npz")
-                        # Save both features and metadata
                         np.savez_compressed(save_path, features=features, metadata=sequence_metadata)
 
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
-    paths = {
-        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset'
-        # 'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_set',
-        # 'validation':'/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'
-    }
-    # concatenate_and_process_files(paths, SAMPLE_RATE, hyperparameters_combinations, files_to_append=2, save_dir=evaluation_directory)
-    save_features_with_metadata(paths, SAMPLE_RATE, hyperparameters_combinations, 30, evaluation_directory)
+    
+    normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset'}
+    concatenate_and_process_files(normal_paths, SAMPLE_RATE, hyperparameters_combinations, files_to_append=20, save_dir=evaluation_directory)
+    
+    validation_paths = {'validation': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'}
+    concatenate_and_process_files(validation_paths, SAMPLE_RATE, hyperparameters_combinations, files_to_append=20, save_dir=evaluation_directory)
+    
+    abnormal_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset'}
+    save_features_with_metadata(abnormal_paths, SAMPLE_RATE, hyperparameters_combinations, 20, evaluation_directory)
 
 
 if __name__ == '__main__':

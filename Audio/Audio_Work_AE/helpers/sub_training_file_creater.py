@@ -55,11 +55,11 @@ def copy_wav_files_in_date_time_range(source_dir, dest_dir, specified_date_times
 
     return total_files_copied
 if __name__ == "__main__":
-    source_directory = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_single_day/09_Oct"
-    destination_directory = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_subset"
+    source_directory = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_single_day/04_Nov"
+    destination_directory = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_subset"
     
     specified_date_times = [
-        "2023-10-09_00-00-34",
+        "2023-11-04_13-53-01"
     ]
 
     num_files_copied = copy_wav_files_in_date_time_range(source_directory, destination_directory, specified_date_times)

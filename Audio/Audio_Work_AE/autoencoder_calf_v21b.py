@@ -300,7 +300,32 @@ def evaluate_validation(model, dataset, model_save_dir):
         print("No data was processed. Please check the validation dataset.")
         logging.info("No data was processed. Please check the validation dataset to construct validation_reconstruction_errors.png.")
 
-def evaluate_test(npz_dir, model, output_file_path):
+def identify_contributing_files(file_paths, window_start, window_end, window_size, step_size, sample_rate):
+    # Convert window and step sizes to samples
+    window_samples = int(window_size * sample_rate)
+    step_samples = int(step_size * sample_rate)
+
+    # Calculate the total samples contributed by each file to identify their segments in the concatenated audio
+    total_samples_per_file=60 * sample_rate
+    file_samples = [total_samples_per_file for _ in file_paths]
+    file_end_samples = np.cumsum(file_samples)
+
+    # Determine the contributing files and their segments for the window
+    contributing_files = []
+    for i, file_path in enumerate(file_paths):
+        file_start_sample = 0 if i == 0 else file_end_samples[i - 1]
+        file_end_sample = file_end_samples[i]
+
+        # Check if the window overlaps with the current file segment
+        if window_end > file_start_sample and window_start < file_end_sample:
+            # Calculate the overlap segment in the current file
+            overlap_start = max(window_start - file_start_sample, 0) / sample_rate
+            overlap_end = min(window_end - file_start_sample, file_end_sample - file_start_sample) / sample_rate
+            contributing_files.append((file_path, (overlap_start, overlap_end)))
+
+    return contributing_files
+
+def evaluate_test(npz_dir, model, output_file_path, sample_rate, window_size, step_size):
     with open(output_file_path, 'w') as file:
         # Iterate over all npz files in the given directory
         for filename in os.listdir(npz_dir):
@@ -314,77 +339,26 @@ def evaluate_test(npz_dir, model, output_file_path):
                     # Load metadata, assuming it's saved as a dict
                     metadata = data['metadata'].item()
                 else:
-                    metadata = {"file_paths": "Unknown", "sequence_start": "Unknown"}
+                    metadata = {"file_paths": "Unknown", "sequence_start": "Unknown", "sequence_end": "Unknown"}
 
                 # Model prediction for the sequence
                 predictions = model.predict(features[np.newaxis, :, :])
 
                 # Calculate reconstruction error (MSE) for each window in the sequence
                 reconstruction_errors = np.mean((features - predictions.squeeze()) ** 2, axis=1)  # axis=1 computes MSE for each window
-
-                # Log the reconstruction errors along with metadata for each window
+                
+                # Iterate through each window to identify contributing files and log details
                 for i, error in enumerate(reconstruction_errors):
-                    # Assuming sequence_start stores the start index of each window in the original audio
-                    window_start = metadata.get('sequence_start', 'Unknown') + i
-                    results_str = f"Filename: {filename}, Window {i}, Reconstruction Error: {error}, Files: {metadata['file_paths']}, Window Start: {window_start}\n"
-                    print(results_str)  # Print to console for verification
-                    file.write(results_str)  # Write to output file
+                    window_start_sample = metadata['sequence_start'] + i * step_size * sample_rate
+                    window_end_sample = window_start_sample + window_size * sample_rate
+                    contributing_files = identify_contributing_files(metadata['file_paths'], window_start_sample, window_end_sample, window_size, step_size, sample_rate)
+                    
+                    # Log the reconstruction errors along with contributing file details for each window
+                    for fp, seg in contributing_files:
+                        file_str = f"File: {fp}, Segment (start, end) in seconds: {seg}, Window {i}, Reconstruction Error: {error}\n"
+                        print(file_str)  # Print to console for verification
+                        file.write(file_str)  # Write to output file
 
-
-def experiment_with_configurations(root_path, paths, sample_rate, evaluation_directory, hyperparameters_combinations):
-    abnormal_path = paths['abnormal']  #  the abnormal data
-    normal_path=paths['normal']
-    validation_path=paths['validation']
-    validation_files = [os.path.join(paths['validation'], f) for f in os.listdir(paths['validation']) if f.endswith('.wav')]
-    print(f"Number of validation files: {len(validation_files)}")
-
-    # List of file paths in abnormal 
-    file_paths = [os.path.join(abnormal_path, f) for f in os.listdir(abnormal_path) if f.endswith('.wav')]
-    
-    for combination in hyperparameters_combinations:
-        # Value extraction
-        window_size = combination["window_size"]
-        step_size = combination["step_size"]
-        expected_timesteps = combination["expected_timesteps"]
-        lstm_neurons = combination["lstm_neurons"]
-        epochs = combination["epochs"]
-        batch_size = combination["batch_size"]  
-
-        dataset_dirname = f"ws{window_size}_ss{step_size}_et{expected_timesteps}_lstm{lstm_neurons}_{epochs}epochs_bs{batch_size}"
-        model_save_dir = os.path.join(evaluation_directory, dataset_dirname)
-        os.makedirs(model_save_dir, exist_ok=True)
-
-        #   Create training dataset
-        train_dataset = create_tf_dataset(
-            {'normal': normal_path}, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
-        )
-        val_dataset = create_tf_dataset(
-            {'validation': validation_path}, sample_rate, window_size, step_size, expected_timesteps, TOTAL_FEATURES, batch_size # Batch_size
-        )
-        #   Build and train the model
-        autoencoder = build_autoencoder(expected_timesteps, TOTAL_FEATURES, lstm_neurons,   batch_size)
-        autoencoder.fit(train_dataset, epochs=epochs, callbacks=[EarlyStopping(monitor='loss', patience=3),ResetStatesCallback()],validation_data=val_dataset)
-        
-        #   Save the model
-        model_path = os.path.join(model_save_dir, "autoencoder_model.h5")
-        autoencoder.save(model_path)
-        logging.info(f"Model saved to {model_path}")
-        
-        # model_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3/ws7_ss3.5_et10_lstm128_1epochs_bs32/autoencoder_model.h5'
-        # Validate the model
-        evaluate_model_and_plot_errors(autoencoder,val_dataset,model_save_dir)
-        
-        #   Rebuild for testing.        
-        new_model=rebuild_model_for_prediction(expected_timesteps,TOTAL_FEATURES,lstm_neurons)
-        new_model.load_weights(model_path)
-        txt_file_path=os.path.join(model_save_dir,"reconstruction_error.txt")
-        
-        # Predict and store errors.
-        predict_and_store_errors(new_model, file_paths, sample_rate, window_size, step_size, expected_timesteps, total_features=TOTAL_FEATURES, n_files_per_batch=30, output_file=txt_file_path)
-        
-        # Plot the RMS plots.
-        data = parse_txt_file(txt_file_path)
-        plot_rmse_by_time(data, model_save_dir) 
 
 def builder(normal_path,    abnormal_path,  validation_path, configs, evaluation_directory):
     window_size = configs["window_size"]
@@ -403,18 +377,18 @@ def builder(normal_path,    abnormal_path,  validation_path, configs, evaluation
     model_save_file = os.path.join(model_save_dir, "autoencoder_model.h5")
     os.makedirs(model_save_dir, exist_ok=True)
     
-    # # Creating tf_dataset from the npz features
-    # train_dataset = create_tf_dataset_from_npz(normal_path, batch_size, expected_timesteps, TOTAL_FEATURES)
-    # val_dataset = create_tf_dataset_from_npz(validation_path,   batch_size,    expected_timesteps, TOTAL_FEATURES)
+    # Creating tf_dataset from the npz features
+    train_dataset = create_tf_dataset_from_npz(normal_path, batch_size, expected_timesteps, TOTAL_FEATURES)
+    val_dataset = create_tf_dataset_from_npz(validation_path,   batch_size,    expected_timesteps, TOTAL_FEATURES)
     
-    # # Training the model and saving it
-    # autoencoder=build_model(train_dataset, val_dataset, expected_timesteps, TOTAL_FEATURES, lstm_neurons, epochs, batch_size)
-    # autoencoder.fit(train_dataset, epochs=epochs, validation_data=val_dataset,  callbacks=[EarlyStopping(monitor='loss', patience=3), ResetStatesCallback()])
-    # autoencoder.save(model_save_file)
-    # logging.info(f"Model saved to {model_save_file}")
+    # Training the model and saving it
+    autoencoder=build_model(train_dataset, val_dataset, expected_timesteps, TOTAL_FEATURES, lstm_neurons, epochs, batch_size)
+    autoencoder.fit(train_dataset, epochs=epochs, validation_data=val_dataset,  callbacks=[EarlyStopping(monitor='loss', patience=3), ResetStatesCallback()])
+    autoencoder.save(model_save_file)
+    logging.info(f"Model saved to {model_save_file}")
     
-    # # Evaluate the validation set
-    # evaluate_validation(autoencoder, val_dataset, model_save_dir)
+    # Evaluate the validation set
+    evaluate_validation(autoencoder, val_dataset, model_save_dir)
     
     # Rebuild the model for testing ( Statefullnes )
     autoencoder_test=rebuild_model_for_prediction(expected_timesteps,TOTAL_FEATURES,lstm_neurons)
@@ -422,7 +396,8 @@ def builder(normal_path,    abnormal_path,  validation_path, configs, evaluation
     
     # Predict and store errors.
     txt_file_path=os.path.join(model_save_dir,"reconstruction_error.txt")
-    evaluate_test(abnormal_path, autoencoder_test, txt_file_path)
+    # evaluate_test(abnormal_path, autoencoder_test, txt_file_path)
+    evaluate_test(abnormal_path, autoencoder_test, txt_file_path, SAMPLE_RATE, window_size, step_size)
 
     
 def main(evaluation_directory):
