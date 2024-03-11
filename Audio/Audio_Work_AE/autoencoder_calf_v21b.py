@@ -17,109 +17,72 @@ from tensorflow.keras.models import Model, load_model
 
 
 # Logging configuration
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+tf.config.run_functions_eagerly(True)
+
+log_filename = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2/processing_log.txt'
+logging.basicConfig(level=logging.INFO,
+                    format='%(asctime)s - %(levelname)s - %(message)s',
+                    handlers=[logging.FileHandler(log_filename, 'a'), logging.StreamHandler()])
+
 class ResetStatesCallback(callbacks.Callback):
     def on_epoch_begin(self, epoch, logs=None):
         self.model.reset_states()
 
-
 # Constants
-SAMPLE_RATE = 16000
+SAMPLE_RATE = 44100
 TOTAL_FEATURES = 23
-
 
 # 5 * 25 = 125,   
 hyperparameters_combinations = [
-    {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 20, "batch_size": 32},
-    {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
-    {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 20, "batch_size": 32}
+    # {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    # {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
 ]
-
-def create_model_directory(root_path, config):
-    model_dir = os.path.join(root_path, "model_{}".format("_".join(map(str, config))))
-    os.makedirs(model_dir, exist_ok=True)
-    return model_dir
 
 def load_audio_file(file_path, sample_rate=SAMPLE_RATE):
     audio, _ = librosa.load(file_path, sr=sample_rate)
     return audio
 
-def extract_spectral_features(audio, sample_rate):# Spectral Features 
-    spectral_centroids = librosa.feature.spectral_centroid(y=audio, sr=sample_rate)[0]
-    spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sample_rate)[0]
-    spectral_contrast = librosa.feature.spectral_contrast(y=audio, sr=sample_rate)[0]
-    return np.mean(spectral_centroids), np.mean(spectral_rolloff), np.mean(spectral_contrast)
-
-def extract_temporal_features(audio):# Temporal Features
-    zero_crossing_rate = librosa.feature.zero_crossing_rate(audio)[0]
-    autocorrelation = librosa.autocorrelate(audio)
-    return np.mean(zero_crossing_rate), np.mean(autocorrelation)
-
-def extract_additional_features(audio, sample_rate):#  Additional features
-    chroma_stft = librosa.feature.chroma_stft(y=audio, sr=sample_rate)
-    spec_bw = librosa.feature.spectral_bandwidth(y=audio, sr=sample_rate)
-    spec_flatness = librosa.feature.spectral_flatness(y=audio)
-    rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sample_rate)
-    rms = librosa.feature.rms(y=audio)
-    return np.mean(chroma_stft), np.mean(spec_bw), np.mean(spec_flatness), np.mean(rolloff), np.mean(rms)
-
-def extract_features(audio, sample_rate):
-    mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=13)    # Extract MFCCs
-    mfccs_processed = np.mean(mfccs.T,axis=0)
-    
-    spectral_features = extract_spectral_features(audio, sample_rate)    # Extract additional features
-    temporal_features = extract_temporal_features(audio)
-    additional_features = extract_additional_features(audio, sample_rate)
-    
-    features = np.concatenate((mfccs_processed, spectral_features, temporal_features, additional_features))    # Combine all features
-    return features
-
-def sliding_window(audio, window_size, step_size, sample_rate):
-    num_samples_per_window = int(window_size * sample_rate)
-    step_samples = int(step_size * sample_rate)
-    windows = []
-
-    for start in range(0, len(audio) - num_samples_per_window + 1, step_samples):
-        window = audio[start:start + num_samples_per_window]
-        windows.append(window)
-    return windows
-
-def audio_data_generator(paths, sample_rate, window_size, step_size, expected_timesteps, total_features, n_files_per_batch=30):
+def npz_data_generator(npz_paths, batch_size=32, expected_timesteps=None, total_features=TOTAL_FEATURES):
     def generator():
-        for label, path in paths.items():
-            file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
-            batch_audio = []
+        batch_features = []
+        for npz_path in npz_paths:
+            data = np.load(npz_path)
+            features = data['features']
             
-            for i, file_path in enumerate(file_paths):
-                audio = load_audio_file(file_path, sample_rate)
-                batch_audio.append(audio)
-                
-                # Process in batches of n_files_per_batch or when it's the last file
-                if (i + 1) % n_files_per_batch == 0 or i == len(file_paths) - 1:
-                    concatenated_audio = np.concatenate(batch_audio)
-                    batch_audio = []  # Reset for next batch
-                    
-                    windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
-                    for start in range(0, len(windows) - expected_timesteps + 1, expected_timesteps):
-                        segment_windows = windows[start:start + expected_timesteps]
-                        if len(segment_windows) == expected_timesteps:
-                            features = [extract_features(window, sample_rate) for window in segment_windows]
-                            features = np.stack(features)  # Shape: (expected_timesteps, total_features)
-                            yield features, features
-
+            # Pad features if they do not match the expected timesteps
+            if expected_timesteps is not None and features.shape[1] != expected_timesteps:
+                print("Dont match")
+                difference = expected_timesteps - features.shape[1]
+                padded_features = np.pad(features, ((0, 0), (0, difference), (0, 0)), 'constant')
+                features = padded_features
+            
+            batch_features.append(features)
+            if len(batch_features) == batch_size:
+                yield np.stack(batch_features), np.stack(batch_features)
+                batch_features = []
+        
+        # Handle the last batch by padding it to reach the expected batch size
+        if batch_features:
+            while len(batch_features) < batch_size:
+                # Pad with zeros of shape (expected_timesteps, total_features)
+                batch_features.append(np.zeros((expected_timesteps, total_features)))
+            yield np.stack(batch_features), np.stack(batch_features)
+    
     return generator
 
-def create_tf_dataset(paths, sample_rate, window_size, step_size, expected_timesteps, total_features, batch_size=32):
+def create_tf_dataset_from_npz(npz_dir, batch_size=32, expected_timesteps=None, total_features=TOTAL_FEATURES):
+    npz_paths = [os.path.join(npz_dir, filename) for filename in os.listdir(npz_dir) if filename.endswith('.npz')]
     dataset = tf.data.Dataset.from_generator(
-        generator=audio_data_generator(paths, sample_rate, window_size, step_size, expected_timesteps, total_features),
+        generator=npz_data_generator(npz_paths, batch_size, expected_timesteps, total_features),
         output_signature=(
-            tf.TensorSpec(shape=(expected_timesteps, total_features), dtype=tf.float32),
-            tf.TensorSpec(shape=(expected_timesteps, total_features), dtype=tf.float32),
+            tf.TensorSpec(shape=(batch_size, expected_timesteps, total_features), dtype=tf.float32),
+            tf.TensorSpec(shape=(batch_size, expected_timesteps, total_features), dtype=tf.float32)
         )
     )
-    return dataset.batch(batch_size, drop_remainder=True).prefetch(tf.data.AUTOTUNE)
-    
-def build_autoencoder(expected_timesteps, total_features, lstm_neurons, batch_size):  
+    return dataset.prefetch(tf.data.AUTOTUNE)
+
+def build_model(train_dataset, val_dataset, expected_timesteps, total_features, lstm_neurons, epochs, batch_size):  
     # Input layer adjusted for stateful LSTMs
     input_layer = Input(batch_shape=(batch_size, expected_timesteps, total_features))
 
@@ -136,10 +99,10 @@ def build_autoencoder(expected_timesteps, total_features, lstm_neurons, batch_si
     x = LSTM(lstm_neurons, return_sequences=True, stateful=True)(x)
     x = TimeDistributed(Dense(total_features))(x)
     
-    autoencoder = Model(inputs=input_layer, outputs=x)
-    autoencoder.compile(optimizer='adam', loss='mse')
+    model = Model(inputs=input_layer, outputs=x)
+    model.compile(optimizer='adam', loss='mse')
     
-    return autoencoder
+    return model
 
 def rebuild_model_for_prediction(expected_timesteps, total_features, lstm_neurons):
     input_layer = Input(batch_shape=(1, expected_timesteps, total_features))
@@ -159,39 +122,6 @@ def rebuild_model_for_prediction(expected_timesteps, total_features, lstm_neuron
     model.compile(optimizer='adam', loss='mse')
     
     return model
-
-def test_model_on_audio_file(model_path, audio_file_path, sample_rate, window_size, step_size, expected_timesteps, total_features, txt_file_path):
-    # Rebuild model for prediction with batch_size=1
-    model = rebuild_model_for_prediction(expected_timesteps, total_features, lstm_neurons=128)
-    model.load_weights(model_path)
-
-    # Process the audio file and predict
-    audio = load_audio_file(audio_file_path, sample_rate)
-    windows = sliding_window(audio, window_size, step_size, sample_rate)
-    windows_features_list = [extract_features(window, sample_rate) for window in windows]
-    
-    # Ensure there's enough windows to form at least one sequence of expected_timesteps
-    if len(windows_features_list) < expected_timesteps:
-        print("Not enough data for a full sequence.")
-        return
-
-    # Organize windows into sequences
-    sequences = [windows_features_list[i:i + expected_timesteps] for i in range(0, len(windows_features_list), expected_timesteps) if len(windows_features_list[i:i + expected_timesteps]) == expected_timesteps]
-    sequences_features = np.array(sequences)
-
-    # Initialize an empty list to store reconstruction errors for each sequence
-    sequence_reconstruction_errors = []
-
-    # Predict and calculate reconstruction error for each sequence
-    for sequence in sequences_features:
-        sequence_reshaped = sequence.reshape(1, expected_timesteps, total_features)
-        predicted_sequence = model.predict(sequence_reshaped, batch_size=1)
-        sequence_error = np.mean(np.power(sequence_reshaped - predicted_sequence, 2), axis=(1, 2))
-        sequence_reconstruction_errors.extend(sequence_error)
-
-    # Save the reconstruction errors for each sequence
-    np.savetxt(txt_file_path, sequence_reconstruction_errors, fmt='%f')
-    print(f"Reconstruction errors for each sequence saved to {txt_file_path}")
     
 def sliding_window_with_positions(audio, window_size, step_size, sample_rate):
     num_samples_per_window = int(window_size * sample_rate)
@@ -341,7 +271,7 @@ def plot_window_granularity(data, output_dir, date):
     plt.savefig(os.path.join(output_dir, 'window', f"{date}.png"))
     plt.close()
 
-def evaluate_model_and_plot_errors(model, dataset, model_save_dir):
+def evaluate_validation(model, dataset, model_save_dir):
     all_reconstruction_errors = []
     sequence_indices = []  # To keep track of the sequence index
 
@@ -364,8 +294,42 @@ def evaluate_model_and_plot_errors(model, dataset, model_save_dir):
         plt.savefig(os.path.join(model_save_dir, "validation_reconstruction_errors.png"))
         plt.close()
         print(f"Plot saved to {os.path.join(model_save_dir, 'validation_reconstruction_errors.png')}")
+        logging.info(f"Plot saved to {os.path.join(model_save_dir, 'validation_reconstruction_errors.png')}")
+
     else:
         print("No data was processed. Please check the validation dataset.")
+        logging.info("No data was processed. Please check the validation dataset to construct validation_reconstruction_errors.png.")
+
+def evaluate_test(npz_dir, model, output_file_path):
+    with open(output_file_path, 'w') as file:
+        # Iterate over all npz files in the given directory
+        for filename in os.listdir(npz_dir):
+            if filename.endswith('.npz'):
+                npz_path = os.path.join(npz_dir, filename)
+                # Load the data with allow_pickle=True to load Python objects
+                data = np.load(npz_path, allow_pickle=True)
+                features = data['features']
+                
+                if 'metadata' in data:
+                    # Load metadata, assuming it's saved as a dict
+                    metadata = data['metadata'].item()
+                else:
+                    metadata = {"file_paths": "Unknown", "sequence_start": "Unknown"}
+
+                # Model prediction for the sequence
+                predictions = model.predict(features[np.newaxis, :, :])
+
+                # Calculate reconstruction error (MSE) for each window in the sequence
+                reconstruction_errors = np.mean((features - predictions.squeeze()) ** 2, axis=1)  # axis=1 computes MSE for each window
+
+                # Log the reconstruction errors along with metadata for each window
+                for i, error in enumerate(reconstruction_errors):
+                    # Assuming sequence_start stores the start index of each window in the original audio
+                    window_start = metadata.get('sequence_start', 'Unknown') + i
+                    results_str = f"Filename: {filename}, Window {i}, Reconstruction Error: {error}, Files: {metadata['file_paths']}, Window Start: {window_start}\n"
+                    print(results_str)  # Print to console for verification
+                    file.write(results_str)  # Write to output file
+
 
 def experiment_with_configurations(root_path, paths, sample_rate, evaluation_directory, hyperparameters_combinations):
     abnormal_path = paths['abnormal']  #  the abnormal data
@@ -422,14 +386,54 @@ def experiment_with_configurations(root_path, paths, sample_rate, evaluation_dir
         data = parse_txt_file(txt_file_path)
         plot_rmse_by_time(data, model_save_dir) 
 
+def builder(normal_path,    abnormal_path,  validation_path, configs, evaluation_directory):
+    window_size = configs["window_size"]
+    step_size = configs["step_size"]
+    expected_timesteps = configs["expected_timesteps"]
+    lstm_neurons = configs["lstm_neurons"]
+    epochs = configs["epochs"]
+    batch_size = configs["batch_size"]  
+    # abnormal_path=normal_path
+    validation_path=normal_path
+    
+    
+    # Creating the directories for storing the files.
+    dataset_dirname = f"ws{window_size}_ss{step_size}_et{expected_timesteps}_lstm{lstm_neurons}_{epochs}epochs_bs{batch_size}"
+    model_save_dir = os.path.join(evaluation_directory, dataset_dirname)
+    model_save_file = os.path.join(model_save_dir, "autoencoder_model.h5")
+    os.makedirs(model_save_dir, exist_ok=True)
+    
+    # # Creating tf_dataset from the npz features
+    # train_dataset = create_tf_dataset_from_npz(normal_path, batch_size, expected_timesteps, TOTAL_FEATURES)
+    # val_dataset = create_tf_dataset_from_npz(validation_path,   batch_size,    expected_timesteps, TOTAL_FEATURES)
+    
+    # # Training the model and saving it
+    # autoencoder=build_model(train_dataset, val_dataset, expected_timesteps, TOTAL_FEATURES, lstm_neurons, epochs, batch_size)
+    # autoencoder.fit(train_dataset, epochs=epochs, validation_data=val_dataset,  callbacks=[EarlyStopping(monitor='loss', patience=3), ResetStatesCallback()])
+    # autoencoder.save(model_save_file)
+    # logging.info(f"Model saved to {model_save_file}")
+    
+    # # Evaluate the validation set
+    # evaluate_validation(autoencoder, val_dataset, model_save_dir)
+    
+    # Rebuild the model for testing ( Statefullnes )
+    autoencoder_test=rebuild_model_for_prediction(expected_timesteps,TOTAL_FEATURES,lstm_neurons)
+    autoencoder_test.load_weights(model_save_file)
+    
+    # Predict and store errors.
+    txt_file_path=os.path.join(model_save_dir,"reconstruction_error.txt")
+    evaluate_test(abnormal_path, autoencoder_test, txt_file_path)
+
+    
 def main(evaluation_directory):
-    root_path = 'Calf_Detection/Audio/Audio_Work_AE'
-    paths = {
-        'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_single_day/08_Oct',
-        'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_set',
-        'validation':'/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'
-    }
-    experiment_with_configurations(root_path, paths, SAMPLE_RATE, evaluation_directory, hyperparameters_combinations)
+    configs = hyperparameters_combinations[0]
+    
+    normal_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2/ws5_ss2.5_et23_lstm128_20epochs_bs32/data'
+    abnormal_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2/ws5_ss2.5_et23_lstm128_20epochs_bs32/test_data'
+    validation_path='/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2/ws5_ss2.5_et23_lstm128_20epochs_bs32/data'
+
+    # Train, Validate and Test.
+    builder(normal_path,    abnormal_path,  validation_path, configs, evaluation_directory)
 
 if __name__ == '__main__':
     evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3'
