@@ -94,7 +94,7 @@ def sliding_window(audio, window_size, step_size, sample_rate):
         windows.append(window)
     return windows
 
-def concatenate_and_process_files(paths, sample_rate, hyperparameters, files_to_append, save_dir):
+def concatenate_and_process_files_train(paths, sample_rate, hyperparameters, files_to_append, save_dir):
     for config in hyperparameters:
         window_size = config["window_size"]
         step_size = config["step_size"]
@@ -132,7 +132,47 @@ def concatenate_and_process_files(paths, sample_rate, hyperparameters, files_to_
                         actual_npz_count += 1  # Increment the actual npz file count
 
         # Log the number of npz files created for this configuration
-        logging.info(f"Configuration {config}: Expected {expected_npz_count} .npz files, actual {actual_npz_count} .npz files created.")
+        logging.info(f"Configuration Train {config}: Expected {expected_npz_count} .npz files, actual {actual_npz_count} .npz files created.")
+
+def concatenate_and_process_files_val(paths, sample_rate, hyperparameters, files_to_append, save_dir):
+    for config in hyperparameters:
+        window_size = config["window_size"]
+        step_size = config["step_size"]
+        expected_timesteps = config["expected_timesteps"]
+        lstm_neurons = config["lstm_neurons"]  # Ensure these are used if needed
+        epochs = config["epochs"]
+        batch_size = config["batch_size"]
+
+        dataset_dirname = f"ws{window_size}_ss{step_size}_et{expected_timesteps}_lstm{lstm_neurons}_{epochs}epochs_bs{batch_size}"
+        data_save_dir = os.path.join(save_dir, dataset_dirname,'val_data')
+        os.makedirs(data_save_dir, exist_ok=True)
+
+        actual_npz_count = 0  # Initialize actual npz file count
+
+        for label, path in paths.items():
+            file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
+            num_audio_files = len(file_paths)  # Total number of audio files in the current path
+            num_batches = len(file_paths) // files_to_append + (1 if len(file_paths) % files_to_append > 0 else 0)
+            expected_npz_count = expected_npz_files_per_config(num_audio_files, window_size, step_size, expected_timesteps, files_to_append)
+
+            for batch_idx in range(num_batches):
+                start_idx = batch_idx * files_to_append
+                end_idx = min(start_idx + files_to_append, len(file_paths))
+                batch_file_paths = file_paths[start_idx:end_idx]
+
+                concatenated_audio = np.concatenate([load_audio_file(fp, sample_rate) for fp in batch_file_paths if load_audio_file(fp, sample_rate) is not None], axis=0)
+
+                windows = sliding_window(concatenated_audio, window_size, step_size, sample_rate)
+                for i in range(0, len(windows), expected_timesteps):
+                    sequence = windows[i:i + expected_timesteps]
+                    if len(sequence) == expected_timesteps:
+                        features = np.array([extract_features(w, sample_rate) for w in sequence])
+                        save_path = os.path.join(data_save_dir, f"{label}_config{config['window_size']}_batch{batch_idx}_seq{i}.npz")
+                        np.savez_compressed(save_path, features=features)
+                        actual_npz_count += 1  # Increment the actual npz file count
+
+        # Log the number of npz files created for this configuration
+        logging.info(f"Configuration Validation{config}: Expected {expected_npz_count} .npz files, actual {actual_npz_count} .npz files created.")
                         
 def save_features_with_metadata(paths, sample_rate, hyperparameters, files_to_append, save_dir):
     for config in hyperparameters:
@@ -162,7 +202,7 @@ def save_features_with_metadata(paths, sample_rate, hyperparameters, files_to_ap
                         window_start_sample = i * int(step_size * sample_rate)
                         window_end_sample = window_start_sample + expected_timesteps * int(window_size * sample_rate)
                         
-                        # Determine which files contribute to the current window sequence
+                        # current window sequence
                         contributing_files = []
                         for j, (start, end) in enumerate(zip(cumulative_lengths[:-1], cumulative_lengths[1:])):
                             if start < window_end_sample and end > window_start_sample:
@@ -180,16 +220,15 @@ def save_features_with_metadata(paths, sample_rate, hyperparameters, files_to_ap
 def main(evaluation_directory):
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     
-    normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset'}
-    concatenate_and_process_files(normal_paths, SAMPLE_RATE, hyperparameters_combinations, files_to_append=20, save_dir=evaluation_directory)
+    normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_training_set'}
+    concatenate_and_process_files_train(normal_paths, SAMPLE_RATE, hyperparameters_combinations, files_to_append=4, save_dir=evaluation_directory)
     
-    validation_paths = {'validation': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'}
-    concatenate_and_process_files(validation_paths, SAMPLE_RATE, hyperparameters_combinations, files_to_append=20, save_dir=evaluation_directory)
+    validation_paths = {'validation': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_subset'}
+    concatenate_and_process_files_val(validation_paths, SAMPLE_RATE, hyperparameters_combinations, files_to_append=4, save_dir=evaluation_directory)
     
-    abnormal_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset'}
-    save_features_with_metadata(abnormal_paths, SAMPLE_RATE, hyperparameters_combinations, 20, evaluation_directory)
-
+    abnormal_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_subset'}
+    save_features_with_metadata(abnormal_paths, SAMPLE_RATE, hyperparameters_combinations, 4, evaluation_directory)
 
 if __name__ == '__main__':
-    evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2'
+    evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug'
     main(evaluation_directory)
