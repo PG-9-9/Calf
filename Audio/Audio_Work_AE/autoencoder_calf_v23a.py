@@ -144,46 +144,45 @@ def sliding_window(audio, window_size, step_size, sample_rate):
         windows.append(window)
     return windows
 
-def save_features_in_batches(paths, sample_rate, combination, output_dir, n_files_per_batch):
+def save_features_in_batches(paths, sample_rate, combination, output_dir, n_files_per_batch=30):
     window_size = combination["window_size"]
     step_size = combination["step_size"]
     expected_timesteps = combination["expected_timesteps"]
-    batch_size = combination["batch_size"]
+    batch_size=combination["batch_size"]
+    TOTAL_FEATURES = 33  # Ensure this matches the actual number of features you're extracting
 
     feature_save_dir = os.path.join(output_dir, f"ws{window_size}_ss{step_size}_et{expected_timesteps}_bs{batch_size}")
     os.makedirs(feature_save_dir, exist_ok=True)
-    
-    batch_counter = 0
-    sequence_features = []
 
+    batch_features = []  # This will hold all features of the current batch before saving
+
+    # Process each path in the paths dictionary
     for label, path in paths.items():
-        for file_path in sorted(os.listdir(path)):
-            if file_path.endswith('.wav'):
-                audio_file_path = os.path.join(path, file_path)
-                audio, sr = librosa.load(audio_file_path, sr=sample_rate)
-
-                # Divide audio into overlapping windows
+        file_paths = [os.path.join(path, f) for f in sorted(os.listdir(path)) if f.endswith('.wav')]
+        
+        # Process files in batches
+        for i in range(0, len(file_paths), n_files_per_batch):
+            current_batch_file_paths = file_paths[i:i + n_files_per_batch]
+            
+            for file_path in current_batch_file_paths:
+                audio = load_audio_file(file_path, sample_rate)
                 windows = sliding_window(audio, window_size, step_size, sample_rate)
-
+                
                 for window in windows:
-                    # Extract features for each window
-                    features = extract_features(window, sr)
-                    sequence_features.append(features)
-
-                    # Once we accumulate enough for a batch, save it
-                    if len(sequence_features) == (batch_size * expected_timesteps):
-                        batch_features = np.array(sequence_features).reshape(batch_size, expected_timesteps, -1)
-                        np.savez_compressed(os.path.join(feature_save_dir, f'batch_{batch_counter}.npz'), features=batch_features)
-                        sequence_features = []  # Reset for next batch
-                        batch_counter += 1
-
-    # Handle leftover features (last batch)
-    if sequence_features:
-        leftover_batch_size = len(sequence_features) // expected_timesteps
-        if leftover_batch_size > 0:
-            leftover_features = sequence_features[:leftover_batch_size * expected_timesteps]
-            leftover_features = np.array(leftover_features).reshape(leftover_batch_size, expected_timesteps, -1)
-            np.savez_compressed(os.path.join(feature_save_dir, f'batch_{batch_counter}_leftover.npz'), features=leftover_features)
+                    features = extract_features(window, sample_rate)
+                    batch_features.append(features)
+                    
+                    if len(batch_features) == expected_timesteps:
+                        # Once we have enough features for a batch, save it
+                        batch_array = np.array(batch_features).reshape(1, expected_timesteps, TOTAL_FEATURES)
+                        np.savez_compressed(os.path.join(feature_save_dir, f"batch_{i//n_files_per_batch}.npz"), features=batch_array)
+                        batch_features = []  # Reset for the next batch
+            
+            # Check if there are leftover features after full batches have been saved
+            if batch_features:
+                leftover_array = np.array(batch_features).reshape(1, len(batch_features), TOTAL_FEATURES)
+                np.savez_compressed(os.path.join(feature_save_dir, f"leftover_{i//n_files_per_batch}.npz"), features=leftover_array)
+                batch_features = []  # Reset for the next set of files
                 
 def build_autoencoder(expected_timesteps, total_features, lstm_neurons):
     input_layer = Input(shape=(expected_timesteps, total_features))
@@ -229,7 +228,6 @@ def create_dataset_from_npz(feature_dir, expected_timesteps, total_features, bat
     dataset = dataset.prefetch(tf.data.AUTOTUNE)
     return dataset
 
-
 def experiment_with_configurations(evaluation_directory, hyperparameters_combinations):
     for combination in hyperparameters_combinations:
         dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}"
@@ -258,9 +256,9 @@ def main(evaluation_directory, enable_logging):
         # 'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_subset',
         # 'validation':'/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'
     }
-    for combination in hyperparameters_combinations:
-        save_features_in_batches(paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30)
-        print(f"Saved features in batches for combination: {combination}")   
+    # for combination in hyperparameters_combinations:
+    #     save_features_in_batches(paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30)
+    #     print(f"Saved features in batches for combination: {combination}")   
 
     experiment_with_configurations(evaluation_directory, hyperparameters_combinations)
 
