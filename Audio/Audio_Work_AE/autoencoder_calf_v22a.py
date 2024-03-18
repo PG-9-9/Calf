@@ -133,29 +133,33 @@ def save_features_in_batches(paths, sample_rate, combination, output_dir, n_file
     batch_counter = 0
     current_batch_features = []
 
-    for path in paths.values():  # 
+    # Iterate through each path and its files
+    for label, path in paths.items():
         file_paths = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
         for file_path in file_paths:
             audio = load_audio_file(file_path, sample_rate)
             windows = sliding_window(audio, window_size, step_size, sample_rate)
             
+            # Generate sequences from sliding windows
             for start in range(0, len(windows) - expected_timesteps + 1, expected_timesteps):
                 sequence = windows[start:start + expected_timesteps]
                 if len(sequence) == expected_timesteps:
                     sequence_features = np.array([extract_features(window, sample_rate) for window in sequence])
                     current_batch_features.append(sequence_features)
                     
-                    if len(current_batch_features) >= batch_size:
-                        batch_features = np.array(current_batch_features[:batch_size])
-                        # For autoencoders, input data is the target data
-                        np.savez_compressed(os.path.join(feature_save_dir, f'batch_{batch_counter}.npz'), features=batch_features, labels=batch_features)
-                        current_batch_features = current_batch_features[batch_size:]
+                    # Save the batch once the desired size is reached
+                    if len(current_batch_features) == batch_size:
+                        np.savez_compressed(os.path.join(feature_save_dir, f'batch_{batch_counter}.npz'),
+                                            features=np.array(current_batch_features),
+                                            labels=np.array(current_batch_features))
+                        current_batch_features = []  # Reset for the next batch
                         batch_counter += 1
 
-    # Save any remaining features not forming a complete batch
+    # Handle any remaining features that don't make up a full batch
     if current_batch_features:
-        batch_features = np.array(current_batch_features)
-        np.savez_compressed(os.path.join(feature_save_dir, f'batch_{batch_counter}.npz'), features=batch_features, labels=batch_features)
+        np.savez_compressed(os.path.join(feature_save_dir, f'batch_{batch_counter}.npz'),
+                            features=np.array(current_batch_features),
+                            labels=np.array(current_batch_features))
 
 def npz_batch_generator(feature_dir, batch_size):
     npz_files = [os.path.join(feature_dir, f) for f in os.listdir(feature_dir) if f.endswith('.npz')]
