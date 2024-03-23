@@ -10,6 +10,7 @@ import time
 import matplotlib.dates as mdates
 from datetime import datetime
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 from logging import NullHandler
 from tensorflow.keras import layers, models, callbacks
 from tensorflow.keras.layers import LSTM, Dense, Input, RepeatVector, TimeDistributed, BatchNormalization, Dropout, Activation
@@ -68,9 +69,9 @@ def convert_seconds(seconds):
         return f"{seconds:.2f}s"
 
 hyperparameters_combinations = [
-    {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 20, "batch_size": 30},
-    {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
-    {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
+    {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 100, "batch_size": 30}
+    # {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    # {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
 ]
 
 # =============== Audio Processing Functions ===============
@@ -140,6 +141,8 @@ def extract_features(audio, sample_rate, feature_extraction_logger=None):
     additional_features = extract_additional_features(audio, sample_rate, feature_extraction_logger)
     raw_audio_features = extract_raw_audio_features(audio, 10, feature_extraction_logger)
     features = np.concatenate((mfccs_processed,spectral_features, temporal_features, additional_features, raw_audio_features))
+    scaler = StandardScaler()
+    features = scaler.fit_transform(features.reshape(-1, 1)).flatten()
     if features.shape[0] != TOTAL_FEATURES:
         raise ValueError(f"Feature extraction error: Expected {TOTAL_FEATURES} features, got {features.shape[0]}")
     if feature_extraction_logger:
@@ -161,23 +164,47 @@ def adjust_features_shape(features, expected_timesteps, total_features):
 
 # =============== Model Building Functions ===============
                 
-def build_autoencoder(expected_timesteps, total_features, lstm_neurons):
+def build_autoencoder(expected_timesteps, total_features,lstm_neurons):
     input_layer = Input(shape=(expected_timesteps, total_features))
 
     # Encoder
-    x = LSTM(128, activation='relu', return_sequences=True)(input_layer)
-    x = LSTM(64, activation='relu', return_sequences=False)(x)
+    x = Conv1D(64, kernel_size=3, padding='same', activation='relu')(input_layer)
+    x = MaxPooling1D(2, padding='same')(x)
+    x = LSTM(128, activation='tanh', return_sequences=True)(x)
+    x = LSTM(64, activation='tanh', return_sequences=False)(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.1)(x)
     x = RepeatVector(expected_timesteps)(x)
 
     # Decoder
-    x = LSTM(64, activation='relu', return_sequences=True)(x)
-    x = LSTM(128, activation='relu', return_sequences=True)(x)
+    x = LSTM(64, activation='tanh', return_sequences=True)(x)
+    x = LSTM(128, activation='tanh', return_sequences=True)(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.1)(x)
     output_layer = TimeDistributed(Dense(total_features))(x)
 
     autoencoder = Model(inputs=input_layer, outputs=output_layer)
     autoencoder.compile(optimizer='adam', loss='mse')
 
     return autoencoder
+# def build_autoencoder(expected_timesteps, total_features, lstm_neurons):
+#     input_layer = Input(shape=(expected_timesteps, total_features))
+    
+#     # Encoder with Conv1D and increased complexity
+#     x = Conv1D(64, kernel_size=3, padding='same', activation='relu')(input_layer)
+#     x = MaxPooling1D(2, padding='same')(x)
+#     x = LSTM(lstm_neurons, activation='tanh', return_sequences=True, recurrent_dropout=0.2)(x)
+#     x = LSTM(lstm_neurons // 2, activation='tanh', return_sequences=False, recurrent_dropout=0.2)(x)
+#     x = RepeatVector(expected_timesteps)(x)
+
+#     # Decoder
+#     x = LSTM(lstm_neurons // 2, activation='tanh', return_sequences=True, recurrent_dropout=0.2)(x)
+#     x = LSTM(lstm_neurons, activation='tanh', return_sequences=True, recurrent_dropout=0.2)(x)
+#     x = TimeDistributed(Dense(total_features))(x)
+
+#     autoencoder = Model(inputs=input_layer, outputs=output_layer)
+#     autoencoder.compile(optimizer='adam', loss='mse')
+#     return autoencoder
 
 
 # =============== Data Preparation Functions ===============
@@ -307,6 +334,7 @@ def test_consecutive_anomaly_per_window(model, feature_dir, threshold, min_conse
     return anomaly_results
 
 # =============== Experimentation Functions ===============
+
 def experiment_with_configurations(evaluation_directory, hyperparameters_combinations):
     for combination in hyperparameters_combinations:
         # Dataset directories
@@ -328,17 +356,16 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
         model = build_autoencoder(combination['expected_timesteps'], TOTAL_FEATURES, combination['lstm_neurons'])
 
         # Callbacks
-        checkpoint_path = os.path.join(evaluation_directory, train_dataset_dirname, "00models/model_checkpoint.h5")
+        checkpoint_path = os.path.join(evaluation_directory,"00models/model_checkpoint.h5")
         callbacks = [
-            ModelCheckpoint(checkpoint_path, save_best_only=True, monitor='val_loss', mode='min'),
-            EarlyStopping(monitor='val_loss', patience=3, mode='min')
+            ModelCheckpoint(checkpoint_path, save_best_only=True, monitor='val_loss', mode='min')
         ]
         
         # Training
         model.fit(train_dataset, validation_data=val_dataset, epochs=combination['epochs'], callbacks=callbacks)
         
         # Save final model
-        model_save_path = os.path.join(evaluation_directory, train_dataset_dirname, "00models/final_autoencoder_model.h5")
+        model_save_path = os.path.join(evaluation_directory,"00models/final_autoencoder_model.h5")
         model.save(model_save_path)
         print(f"Final model saved to {model_save_path}")
         
@@ -348,13 +375,12 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
         thresholds = [0.60, 0.70, 0.80]        
         min_consecutive_anomalies_list = [2, 3, 4, 5]
 
-        for threshold in thresholds:
-            for min_consecutive_anomalies in min_consecutive_anomalies_list:
-                print(f"Testing with threshold: {threshold}, Min consecutive anomalies: {min_consecutive_anomalies}")
-                anomaly_results = test_consecutive_anomaly_per_window(model, feature_dir, threshold, min_consecutive_anomalies)
-                for result in anomaly_results:
-                    print(f"File: {result[0]}, Start Window: {result[1]}, End Window: {result[2]}, Anomaly Detected: {result[3]}")
-
+        # for threshold in thresholds:
+        #     for min_consecutive_anomalies in min_consecutive_anomalies_list:
+        #         print(f"Testing with threshold: {threshold}, Min consecutive anomalies: {min_consecutive_anomalies}")
+        #         anomaly_results = test_consecutive_anomaly_per_window(model, feature_dir, threshold, min_consecutive_anomalies)
+        #         for result in anomaly_results:
+        #             print(f"File: {result[0]}, Start Window: {result[1]}, End Window: {result[2]}, Anomaly Detected: {result[3]}")
 
 def main(evaluation_directory, enable_logging):
     global LOGGING_ENABLED
@@ -365,14 +391,14 @@ def main(evaluation_directory, enable_logging):
     mode_1,mode_2,mode_3="train","val","test"
     
     # Training creation
-    for combination in hyperparameters_combinations:
-        save_features_in_batches(normal_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_1)
-        print(f"Saved features in batches for combination: {combination}")   
+    # for combination in hyperparameters_combinations:
+    #     save_features_in_batches(normal_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_1)
+    #     print(f"Saved features in batches for combination: {combination}")   
         
     # Validation creation
-    for combination in hyperparameters_combinations:
-        save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_2)
-        print(f"Saved features in batches for combination: {combination}") 
+    # for combination in hyperparameters_combinations:
+    #     save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_2)
+    #     print(f"Saved features in batches for combination: {combination}") 
         
     experiment_with_configurations(evaluation_directory, hyperparameters_combinations)
 
