@@ -38,8 +38,8 @@ if gpus:
     except RuntimeError as e:
         print(e)
 
-for model_version in ["d0"]:
-# for model_version in ["d2", "d3", "d4", "d5", "d6", "d7"]:
+# for model_version in ["d0"]:
+for model_version in ["d2", "d3", "d4", "d5", "d6", "d7"]:
     #Training 
     command = [
         'python3',
@@ -215,6 +215,7 @@ for model_version in ["d0"]:
     plt.legend()
     plt.grid(True)
     save_path = f'Calf_Detection/new_app/New_Models/graphs/extended/roc_curve_{model_version}.png'
+    os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     # Save the plot to the specified path
     plt.savefig(save_path, bbox_inches='tight')

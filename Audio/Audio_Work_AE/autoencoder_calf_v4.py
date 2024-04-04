@@ -1,301 +1,429 @@
-import datetime
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy.stats import ttest_ind
 import tensorflow as tf
 import librosa
 import os
-
-from sklearn.model_selection import train_test_split, StratifiedKFold
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import (
-    accuracy_score, precision_score, recall_score, f1_score,
-    roc_auc_score, confusion_matrix, precision_recall_curve, roc_curve, auc
-)
-
-from tensorflow.keras import layers, models, Model, Sequential
-from tensorflow.keras.layers import (
-    Dense, Dropout, Input, BatchNormalization, LSTM, RepeatVector,
-    TimeDistributed
-)
-from tensorflow.keras.callbacks import EarlyStopping
 import logging
+import time
+import matplotlib.dates as mdates
+from datetime import datetime
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import joblib
+from tensorflow.keras import layers, models, callbacks
+from tensorflow.keras.layers import LSTM, Dense, Input, RepeatVector, TimeDistributed, BatchNormalization, Dropout, Activation
+from tensorflow.keras.callbacks import EarlyStopping
+from tensorflow.keras.layers import Bidirectional, LeakyReLU, Conv1D, MaxPooling1D, UpSampling1D
+from tensorflow.keras.models import Model, load_model
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
+from logging import NullHandler
 
-# Initialize logging
 
-current_datetime=datetime.datetime.now()
+
+# Logging configuration
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-logging.info(f"AutoEncoder last ran on: {current_datetime.strftime('%Y-%m-%d %H:%M:%S')}")
-# Sliding Window
+class ResetStatesCallback(callbacks.Callback):
+    def on_epoch_begin(self, epoch, logs=None):
+        self.model.reset_states()
+
+# =============== Setup and Configuration ===============
+
+SAMPLE_RATE = 44100
+TOTAL_FEATURES = 33
+LOGGING_ENABLED = False
+log_dir = "/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/logs"
+
+# Setup a global logging directory
+if not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+def setup_logger(name, log_file, level=logging.INFO):
+    logger = logging.getLogger(name)
+    if logger.hasHandlers():
+        logger.handlers.clear()  # Clear existing handlers
+
+    if LOGGING_ENABLED:
+        handler = logging.FileHandler(log_file)        
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logger.addHandler(handler)
+    else:
+        # Add a NullHandler when logging is disabled
+        logger.addHandler(NullHandler())
+    
+    logger.setLevel(level)
+    return logger
+
+feature_extraction_logger = setup_logger('feature_extraction', os.path.join(log_dir, 'feature_extraction.log'))
+
+# =============== Helper Functions ===============
+
+def convert_seconds(seconds):
+    hours = seconds // 3600
+    minutes = (seconds % 3600) // 60
+    seconds = seconds % 60
+    if hours > 0:
+        return f"{int(hours)}h {int(minutes)}m {seconds:.2f}s"
+    elif minutes > 0:
+        return f"{int(minutes)}m {seconds:.2f}s"
+    else:
+        return f"{seconds:.2f}s"
+
+hyperparameters_combinations = [
+    # {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 100, "batch_size": 30}
+    # {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
+    {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
+]
+
+def normalize_features(features, scaler):
+    return scaler.transform(features.reshape(-1, 1)).flatten()
+
+
+
+# =============== Audio Processing Functions ===============
+
+def load_audio_file(file_path, sample_rate=SAMPLE_RATE, logger=None):
+    start_time = time.time()
+    audio, _ = librosa.load(file_path, sr=sample_rate)
+    if logger:
+        logger.info(f"Loaded audio file {file_path} in {convert_seconds(time.time() - start_time)}.")
+    return audio
 
 def sliding_window(audio, window_size, step_size, sample_rate):
     num_samples_per_window = int(window_size * sample_rate)
     step_samples = int(step_size * sample_rate)
     windows = []
+
     for start in range(0, len(audio) - num_samples_per_window + 1, step_samples):
         window = audio[start:start + num_samples_per_window]
         windows.append(window)
     return windows
 
-# Feature Extraction:
+# =============== Feature Extraction Functions ===============
 
-# MFCCs (Power Spectrum)
-def extract_mfccs(audio, sample_rate, n_mfcc=13):
-    mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=n_mfcc)
-    mfccs_processed = np.mean(mfccs.T, axis=0)
-    return mfccs_processed
-
-# Spectral Features (spectral centroid, spectral roll-off, and spectral contrast):
-def extract_spectral_features(audio, sample_rate):
+def extract_spectral_features(audio, sample_rate, logger=None):
+    start_time = time.time()
     spectral_centroids = librosa.feature.spectral_centroid(y=audio, sr=sample_rate)[0]
     spectral_rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sample_rate)[0]
     spectral_contrast = librosa.feature.spectral_contrast(y=audio, sr=sample_rate)[0]
+    if logger:
+        logger.info(f"Spectral features extraction time: {convert_seconds(time.time() - start_time)}.")
     return np.mean(spectral_centroids), np.mean(spectral_rolloff), np.mean(spectral_contrast)
 
-# Temporal Features ( zero-crossing rate and autocorrelation):
-def extract_temporal_features(audio):
+def extract_temporal_features(audio, logger=None):
+    start_time = time.time()
     zero_crossing_rate = librosa.feature.zero_crossing_rate(audio)[0]
     autocorrelation = librosa.autocorrelate(audio)
+    if logger:
+        logger.info(f"Temporal features extraction time: {convert_seconds(time.time() - start_time)}.")
     return np.mean(zero_crossing_rate), np.mean(autocorrelation)
 
-# Load audio files and apply sliding windows
+def extract_additional_features(audio, sample_rate, logger=None):
+    start_time = time.time()
+    chroma_stft = librosa.feature.chroma_stft(y=audio, sr=sample_rate)
+    spec_bw = librosa.feature.spectral_bandwidth(y=audio, sr=sample_rate)
+    spec_flatness = librosa.feature.spectral_flatness(y=audio)
+    rolloff = librosa.feature.spectral_rolloff(y=audio, sr=sample_rate)
+    rms = librosa.feature.rms(y=audio)
+    if logger:
+        logger.info(f"Additional features extraction time: {convert_seconds(time.time() - start_time)}.")
+    return np.mean(chroma_stft), np.mean(spec_bw), np.mean(spec_flatness), np.mean(rolloff), np.mean(rms)
 
-def load_and_window_audio_files(path, label, window_size, step_size, sample_rate):
-    audio_windows = []
-    labels = []
-    for filename in os.listdir(path):
-        if filename.endswith('.wav'):
-            file_path = os.path.join(path, filename)
-            audio, _ = librosa.load(file_path, sr=sample_rate)
-            windows = sliding_window(audio, window_size, step_size, sample_rate)
-            audio_windows.extend(windows)
-            labels.extend([label] * len(windows))
-    return audio_windows, labels
+def extract_raw_audio_features(audio, num_samples, logger=None):
+    start_time = time.time()
+    step = len(audio) // num_samples
+    raw_features = audio[::step][:num_samples]
+    if logger:
+        logger.info(f"Raw audio features extraction time: {convert_seconds(time.time() - start_time)}.")
+    return raw_features
 
-# Feature extraction for each window
+def extract_features(audio, sample_rate, feature_extraction_logger,scaler_creater,output_dir):
+    # Aggregate all feature extraction processes
+    start_time = time.time()
+    mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=13)    # Extract MFCCs
+    mfccs_processed = np.mean(mfccs.T,axis=0)
+    spectral_features = extract_spectral_features(audio, sample_rate, feature_extraction_logger)
+    temporal_features = extract_temporal_features(audio, feature_extraction_logger)
+    additional_features = extract_additional_features(audio, sample_rate, feature_extraction_logger)
+    raw_audio_features = extract_raw_audio_features(audio, 10, feature_extraction_logger)
+    features = np.concatenate((mfccs_processed,spectral_features, temporal_features, additional_features, raw_audio_features))
+    if scaler_creater==True:
+        features
+    else:
+        scaler_path=os.path.join(output_dir,"scaler.gz")
+        scaler = joblib.load(scaler_path)
+        features=scaler.transform(features.reshape(-1,1))
+    if features.shape[0] != TOTAL_FEATURES:
+        raise ValueError(f"Feature extraction error: Expected {TOTAL_FEATURES} features, got {features.shape[0]}")
+    if feature_extraction_logger:
+        feature_extraction_logger.info(f"Total feature extraction time: {convert_seconds(time.time() - start_time)}.")
+        feature_extraction_logger.info(f"Feature shape: {features.shape}, Total feature extraction time: {convert_seconds(time.time() - start_time)}.")
 
-def extract_features(audio_windows, sample_rate):
-    features = []
-    for window in audio_windows:
-        mfccs = extract_mfccs(window, sample_rate)
-        spectral_features = extract_spectral_features(window, sample_rate)
-        temporal_features = extract_temporal_features(window)
-        all_features = np.concatenate([mfccs, spectral_features, temporal_features])
-        features.append(all_features)
-    return np.array(features)
+    return features
 
-# Simplified LSTM autoencoder
 
-# def enhanced_autoencoder_with_lstm(input_dim, timesteps, n_features, lstm_neurons):
-#     input_layer = Input(shape=(timesteps, n_features))
+def fit_scaler_to_training_data(training_paths, sample_rate, evaluation_directory):
+    scaler = StandardScaler()
+    features_list = []
 
-#     # Encoder with LSTM
-#     encoder = LSTM(lstm_neurons, activation='relu', return_sequences=True)(input_layer)
-#     encoder = LSTM(lstm_neurons // 2, activation='relu', return_sequences=False)(encoder)
-#     encoder = BatchNormalization()(encoder)
-#     encoder = Dropout(0.1)(encoder)
+    # Assume training_paths is a dictionary with paths to training data
+    for label, path in training_paths.items():
+        audio_files = [os.path.join(path, f) for f in os.listdir(path) if f.endswith('.wav')]
+        for file_path in audio_files[:100]:  # Limit to first 100 files or another representative set
+            audio = load_audio_file(file_path, sample_rate)
+            features = extract_features(audio, sample_rate,feature_extraction_logger=None,scaler_creater=True,output_dir=evaluation_directory)
+            features_list.append(features)
+    
+    # Fit the scaler
+    features_array = np.vstack(features_list)  # Convert list of arrays into a single 2D array
+    scaler.fit(features_array)
+    # Save the scaler for later use
+    scaler_file_path = os.path.join(evaluation_directory, 'scaler.gz')
+    try:
+        joblib.dump(scaler, scaler_file_path)
+        print(f"Scaler successfully saved to {scaler_file_path}")
+    except Exception as e:
+        print(f"Error saving the scaler: {e}")
 
-#     # Repeat Vector
-#     repeat_vector = RepeatVector(timesteps)(encoder)
 
-#     # Decoder with LSTM
-#     decoder = LSTM(lstm_neurons // 2, activation='relu', return_sequences=True)(repeat_vector)
-#     decoder = LSTM(lstm_neurons, activation='relu', return_sequences=True)(decoder)
-#     decoder = BatchNormalization()(decoder)
-#     decoder = Dropout(0.1)(decoder)
-#     output_layer = TimeDistributed(Dense(n_features, activation='sigmoid'))(decoder)
+def adjust_features_shape(features, expected_timesteps, total_features):
 
-#     autoencoder = Model(inputs=input_layer, outputs=output_layer)
-#     autoencoder.compile(optimizer='adam', loss='mean_squared_error')
-#     return autoencoder
+    if len(features) < expected_timesteps:
+        # Pad with zeros
+        padding = np.zeros((expected_timesteps - len(features), total_features))
+        features = np.vstack((features, padding))
+    elif len(features) > expected_timesteps:
+        # Truncate to expected_timesteps
+        features = features[:expected_timesteps]
+    return features
 
-def simplified_autoencoder_with_lstm(timesteps, n_features, lstm_neurons):
-    input_layer = Input(shape=(timesteps, n_features))
+# =============== Model Building Functions ===============
+                
+def build_autoencoder(expected_timesteps, total_features, lstm_neurons):
+    input_layer = Input(shape=(expected_timesteps, total_features))
 
     # Encoder
-    encoder = LSTM(lstm_neurons, activation='relu', return_sequences=False)(input_layer)
-    encoder = BatchNormalization()(encoder)
-    encoder = Dropout(0.1)(encoder)
-
-    # Repeat Vector to turn output into timesteps again
-    repeat_vector = RepeatVector(timesteps)(encoder)
+    # Using Conv1D with stride of 1 to maintain temporal resolution
+    x = Conv1D(64, kernel_size=3, padding='same', activation='relu', strides=1)(input_layer)
+    x = BatchNormalization()(x)
+    x = Dropout(0.1)(x)
+    x = LSTM(lstm_neurons, activation='tanh', return_sequences=True)(x)
+    x = LSTM(int(lstm_neurons / 2), activation='tanh', return_sequences=False)(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.1)(x)
+    x = RepeatVector(expected_timesteps)(x)
 
     # Decoder
-    decoder = LSTM(lstm_neurons, activation='relu', return_sequences=True)(repeat_vector)
-    decoder = BatchNormalization()(decoder)
-    decoder = Dropout(0.1)(decoder)
-    output_layer = TimeDistributed(Dense(n_features))(decoder)
+    x = LSTM(int(lstm_neurons / 2), activation='tanh', return_sequences=True)(x)
+    x = LSTM(lstm_neurons, activation='tanh', return_sequences=True)(x)
+    x = BatchNormalization()(x)
+    x = Dropout(0.1)(x)
+    output_layer = TimeDistributed(Dense(total_features))(x)
 
     autoencoder = Model(inputs=input_layer, outputs=output_layer)
-    autoencoder.compile(optimizer='adam', loss='mean_squared_error')
+    autoencoder.compile(optimizer='adam', loss='mse')
+
     return autoencoder
 
-def model_evaluation(autoencoder, X_test, y_test, model_directory):
-    reconstructed_test = autoencoder.predict(X_test)
-    mse_test = np.mean(np.power(X_test - reconstructed_test, 2), axis=(1, 2))
-    precisions, recalls, thresholds = precision_recall_curve(y_test, mse_test)
-    f1_scores = np.where((precisions + recalls) == 0, 0, 2 * (precisions * recalls) / (precisions + recalls))    
-    # Check for NaN values in F1 scores and handle them
-    f1_scores = np.nan_to_num(f1_scores)
+# =============== Data Preparation Functions ===============
 
-    optimal_idx = np.argmax(f1_scores)
-    optimal_threshold = thresholds[optimal_idx]
+def save_features_in_batches(paths, sample_rate, combination, output_dir, n_files_per_batch, mode):
+    window_size = combination["window_size"]
+    step_size = combination["step_size"]
+    expected_timesteps = combination["expected_timesteps"]
+    batch_size = combination["batch_size"]
+    
+    feature_save_dir = os.path.join(output_dir, f"ws{window_size}_ss{step_size}_et{expected_timesteps}_bs{batch_size}_{mode}")
+    os.makedirs(feature_save_dir, exist_ok=True)
 
-    optimal_predictions = (mse_test > optimal_threshold).astype(int)
+    batch_counter = 0
+    sequence_features = []  # Accumulate features here
 
-    # Plot and save the confusion matrix
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(confusion_matrix(y_test, optimal_predictions), annot=True, fmt='d', cmap='Blues', xticklabels=['Normal', 'Abnormal'], yticklabels=['Normal', 'Abnormal'])
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
-    plt.title('Optimal Confusion Matrix')
-    plt.savefig(os.path.join(model_directory, 'confusion_matrix.png'))
-    plt.close()
-
-    # Plot and save ROC Curve
-    fpr, tpr, _ = roc_curve(y_test, mse_test)
-    roc_auc = auc(fpr, tpr)
-    plt.figure()
-    plt.plot(fpr, tpr, color='darkorange', lw=2, label='ROC curve (area = %0.2f)' % roc_auc)
-    plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
-    plt.xlim([0.0, 1.0])
-    plt.ylim([0.0, 1.05])
-    plt.xlabel('False Positive Rate')
-    plt.ylabel('True Positive Rate')
-    plt.title('Receiver Operating Characteristic')
-    plt.legend(loc="lower right")
-    plt.savefig(os.path.join(model_directory, 'roc_curve.png'))
-    plt.close()
-
-    # Save the model
-    autoencoder.save(os.path.join(model_directory, 'model.keras'))
-
-    # Print evaluation metrics
-    print(f"Optimal Threshold: {optimal_threshold}")
-    print(f"Accuracy: {accuracy_score(y_test, optimal_predictions)}")
-    print(f"Precision: {precision_score(y_test, optimal_predictions)}")
-    print(f"Recall: {recall_score(y_test, optimal_predictions)}")
-    print(f"F1 Score: {f1_score(y_test, optimal_predictions)}")
-    logging.info(f"Model Evaluation Metrics - Optimal Threshold: {optimal_threshold}, Accuracy: {accuracy_score(y_test, optimal_predictions)}, Precision: {precision_score(y_test, optimal_predictions)}, Recall: {recall_score(y_test, optimal_predictions)}, F1 Score: {f1_score(y_test, optimal_predictions)}")
-
-def create_model_directory(root_path, lstm_neurons, epochs, batch_size):
-    model_directory = os.path.join(root_path, f"model_{lstm_neurons}_neurons_{epochs}_epochs_{batch_size}_batch")
-    if not os.path.exists(model_directory):
-        os.makedirs(model_directory)
-    return model_directory
- 
-# def hyperparameter_tuning(root_path, X_train, X_val, y_train, y_val, config_list):
-#     for config in config_list:
-#         lstm_neurons, epochs, batch_size = config
-#         model_directory = create_model_directory(root_path, lstm_neurons, epochs, batch_size)
-#         model_name = os.path.join(model_directory, "autoencoder")
-#         logging.info(f"Training model in directory: {model_directory}")
-#         autoencoder = enhanced_autoencoder_with_lstm(X_train.shape[2], X_train.shape[1], X_train.shape[2], lstm_neurons)
-#         autoencoder.fit(X_train, X_train, epochs=epochs, batch_size=batch_size, validation_data=(X_val, X_val), callbacks=[EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)], verbose=1)
-#         model_evaluation(autoencoder, X_val, y_val, model_directory)
-
-def hyperparameter_tuning(root_path, X_train, X_val, config_list):
-    for config in config_list:
-        lstm_neurons, epochs, batch_size = config
-        model_directory = create_model_directory(root_path, lstm_neurons, epochs, batch_size)
-        logging.info(f"Training model with {lstm_neurons} neurons, {epochs} epochs, batch size {batch_size}")
-
-        autoencoder = simplified_autoencoder_with_lstm(X_train.shape[1], X_train.shape[2], lstm_neurons)
-        autoencoder.fit(X_train, X_train, epochs=epochs, batch_size=batch_size, validation_data=(X_val, X_val),
-                        callbacks=[EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)], verbose=1)
-        model_evaluation(autoencoder, X_val, y_val, model_directory)
-
-
-def process_data(features):
-    logging.info("Starting data processing")
-    X_train, X_val = train_test_split(features, test_size=0.2, random_state=42)
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_val_scaled = scaler.transform(X_val)
-    logging.info("Completed scaling")
-
-    # Reshape data for LSTM
-    timesteps = 1  # Each window is treated as a separate sequence
-    n_features = X_train_scaled.shape[1]
-    X_train_reshaped = X_train_scaled.reshape((-1, timesteps, n_features))
-    X_val_reshaped = X_val_scaled.reshape((-1, timesteps, n_features))
-    logging.info(f"Data reshaped: {X_train_reshaped.shape}")
-
-    return X_train_reshaped, X_val_reshaped
-
-def train_model(X_train, X_val):
-    logging.info(f"Model training with data shape: {X_train.shape}")
-    try:
-        autoencoder = simplified_autoencoder_with_lstm(X_train.shape[1], X_train.shape[2])
-        autoencoder.fit(X_train, X_train, epochs=50, batch_size=32, validation_data=(X_val, X_val),
-                        callbacks=[EarlyStopping(monitor='val_loss', patience=5, restore_best_weights=True)], verbose=1)
-        logging.info("Model training completed")
-    except Exception as e:
-        logging.error("An error occurred during model training", exc_info=True)
-
-if __name__ == "__main__":
-    try:
-        # Paths to your data
-        normal_calf_path = "Calf_Detection/Audio/Audio_Work_AE/normal_calf_subset"
-        abnormal_calf_path = "Calf_Detection/Audio/Audio_Work_AE/abnormal_calf_subset"
-
-        # Define window size, step size, and sample rate
-        window_size = 10  # in seconds
-        step_size = 5  # in seconds
-        sample_rate = 44100  
-
-        # Load and window the data
-        normal_audio_windows, _ = load_and_window_audio_files(normal_calf_path, label=0, window_size=window_size, step_size=step_size, sample_rate=sample_rate)
-        abnormal_audio_windows, _ = load_and_window_audio_files(abnormal_calf_path, label=1, window_size=window_size, step_size=step_size, sample_rate=sample_rate)
-
-        # Extract features for windows
-        normal_features = extract_features(normal_audio_windows, sample_rate)
-        abnormal_features = extract_features(abnormal_audio_windows, sample_rate)
-
-        # Combine normal and abnormal data for testing
-        X_test = np.concatenate((normal_features, abnormal_features))
-        y_test = np.concatenate((np.zeros(len(normal_features)), np.ones(len(abnormal_features))))
-
-        # Split data for training and validation
-        X_train, X_val, y_train, y_val = train_test_split(X_test, y_test, test_size=0.2, random_state=42)
-
-        # Scale the data
-        scaler = StandardScaler()
-        X_train_scaled = scaler.fit_transform(X_train)
-        X_val_scaled = scaler.transform(X_val)
-        X_test_scaled = scaler.transform(X_test)
-
-        # Reshaping for LSTM Input
-        timesteps = 1  # Adjust based on your specific requirements
-        n_features = X_train_scaled.shape[1]
-        X_train_reshaped = X_train_scaled.reshape((-1, timesteps, n_features))
-        X_val_reshaped = X_val_scaled.reshape((-1, timesteps, n_features))
-        X_test_reshaped = X_test_scaled.reshape((-1, timesteps, n_features))
-
-        # Hyperparameter Tuning Configurations
-        # config_list = [
-        #     (64, 50, 32),
-        #     (128, 100, 64),
-        #     (256, 150, 128),
-        #     (512, 200, 256),
-        # ]
+    for label, path in paths.items():
+        file_paths = [os.path.join(path, f) for f in sorted(os.listdir(path)) if f.endswith('.wav')]
         
-        # # Root path for the exports
-        # root_path = "Calf_Detection/Audio/Audio_Work_AE"  
+        # Process in specified batch sizes
+        for start in range(0, len(file_paths), n_files_per_batch):
+            batch_file_paths = file_paths[start:start + n_files_per_batch]
+            
+            for file_path in batch_file_paths:
+                audio = load_audio_file(file_path, sample_rate)
+                windows = sliding_window(audio, window_size, step_size, sample_rate)
 
-        # hyperparameter_tuning(root_path, X_train_reshaped, X_val_reshaped, y_train, y_val, config_list)
-       
-        # Hyperparameter Configurations
-        config_list = [
-            (32, 50, 32),  # 32 neurons, 50 epochs, batch size 32
-            (64, 100, 64), # 64 neurons, 100 epochs, batch size 64
+                for window in windows:
+                    features = extract_features(window, sample_rate, feature_extraction_logger=None,scaler_creater=False,output_dir=output_dir)
+                    sequence_features.append(features)
+                    
+                    # Check if we have enough features for a complete sequence
+                    if len(sequence_features) >= expected_timesteps:
+                        batch_features = np.array(sequence_features[:expected_timesteps])
+                        sequence_features = sequence_features[expected_timesteps:]  # Remove used features
+                        
+                        # Save the batch if it matches the expected size
+                        if batch_features.shape == (expected_timesteps, TOTAL_FEATURES):
+                            np.savez_compressed(os.path.join(feature_save_dir, f"batch_{batch_counter}.npz"), features=batch_features.reshape(1, expected_timesteps, TOTAL_FEATURES))
+                            batch_counter += 1
+                        else:
+                            print("Skipped batch due to incorrect shape.")
+            
+            # Handle leftovers for each n_files_per_batch cycle
+            if sequence_features:
+                # Pad the leftover features to match the expected timesteps
+                while len(sequence_features) < expected_timesteps:
+                    sequence_features.append(np.zeros(TOTAL_FEATURES))  # Padding with zeros
+                    
+                leftover_features = np.array(sequence_features).reshape(1, expected_timesteps, TOTAL_FEATURES)
+                np.savez_compressed(os.path.join(feature_save_dir, f"batch_{batch_counter}.npz"), features=leftover_features)
+                batch_counter += 1
+                sequence_features = []  # Reset for the next batch of files
 
+def create_dataset_from_npz(feature_dir, expected_timesteps, total_features, batch_size):
+    def generator():
+        for npz_file in sorted(os.listdir(feature_dir)):
+            if npz_file.endswith('.npz'):
+                data = np.load(os.path.join(feature_dir, npz_file))
+                features = data['features']
+                for feature in features:
+                    if feature.shape[0] == expected_timesteps and feature.shape[1] == total_features:
+                        yield feature, feature  # Correct shape
+                    else:
+                       # handle features with incorrect shapes
+                        print(f"Skipping feature with incorrect shape: {feature.shape}")
+
+    output_types = (tf.float32, tf.float32)
+    output_shapes = ((expected_timesteps, total_features), (expected_timesteps, total_features))
+
+    dataset = tf.data.Dataset.from_generator(
+        generator, 
+        output_types=output_types, 
+        output_shapes=output_shapes
+    )
+    dataset = dataset.batch(batch_size, drop_remainder=False)  # Handle last smaller batch
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+    return dataset
+
+# =============== Testing Functions ===============
+
+def load_features_as_dataset(feature_dir, expected_timesteps, total_features, batch_size=1):
+
+    def generator():
+        for npz_file in sorted(os.listdir(feature_dir)):
+            if npz_file.endswith('.npz'):
+                data = np.load(os.path.join(feature_dir, npz_file))
+                features = data['features']
+                yield features
+                
+    output_signature = tf.TensorSpec(shape=(None, expected_timesteps, total_features), dtype=tf.float32)
+    
+    dataset = tf.data.Dataset.from_generator(generator, output_signature=output_signature)
+    dataset = dataset.batch(batch_size)
+    return dataset
+
+def test_consecutive_anomaly_per_window(model, feature_dir, threshold, min_consecutive_anomalies=2):
+    anomaly_results = []
+    for npz_file in sorted(os.listdir(feature_dir)):
+        if not npz_file.endswith('.npz'):
+            continue
+        data_path = os.path.join(feature_dir, npz_file)
+        data = np.load(data_path)
+        features = data['features']  # shape : (1, expected_timesteps, total_features)
+        
+        # Predict and calculate MSE
+        reconstructed = model.predict(features)
+        mse = np.mean(np.square(features - reconstructed), axis=-1)
+        mse = np.squeeze(mse)  # Removing single dimensions
+
+        # Detect consecutive anomalies
+        consecutive_count = 0
+        start_index = None
+        for i, error in enumerate(mse):
+            if error > threshold:
+                consecutive_count += 1
+                if start_index is None:
+                    start_index = i
+                if consecutive_count >= min_consecutive_anomalies:
+                    anomaly_results.append((npz_file, start_index, i, True))
+                    consecutive_count = 0  # Reset count
+                    start_index = None  # Reset start index
+            else:
+                consecutive_count = 0  # Reset count
+                start_index = None  # Reset start index
+    
+    return anomaly_results
+
+# =============== Experimentation Functions ===============
+
+def experiment_with_configurations(evaluation_directory, hyperparameters_combinations):
+    for combination in hyperparameters_combinations:
+        # Dataset directories
+        train_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_train"
+        val_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_val"
+        
+        train_feature_dir = os.path.join(evaluation_directory, train_dataset_dirname)
+        val_feature_dir = os.path.join(evaluation_directory, val_dataset_dirname)
+
+        if not os.path.exists(train_feature_dir) or not os.path.exists(val_feature_dir):
+            logging.error(f"One or both feature directories do not exist: {train_feature_dir}, {val_feature_dir}")
+            continue
+        
+        # Load datasets
+        train_dataset = create_dataset_from_npz(train_feature_dir, combination['expected_timesteps'], TOTAL_FEATURES, combination['batch_size'])
+        val_dataset = create_dataset_from_npz(val_feature_dir, combination['expected_timesteps'], TOTAL_FEATURES, combination['batch_size'])
+        
+        # Build model
+        model = build_autoencoder(combination['expected_timesteps'], TOTAL_FEATURES, combination['lstm_neurons'])
+
+        # Callbacks
+        checkpoint_path = os.path.join(evaluation_directory,"00models/model_checkpoint.h5")
+        callbacks = [
+            ModelCheckpoint(checkpoint_path, save_best_only=True, monitor='val_loss', mode='min'),
+            ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=5, min_lr=0.001, verbose=1)
         ]
+        
+        # Training
+        model.fit(train_dataset, validation_data=val_dataset, epochs=combination['epochs'], callbacks=callbacks)
+        
+        # Save final model
+        model_save_path = os.path.join(evaluation_directory,"00models/final_autoencoder_model.h5")
+        model.save(model_save_path)
+        print(f"Final model saved to {model_save_path}")
+        
+        # Validation set.
+        model = tf.keras.models.load_model(model_save_path)
+        feature_dir = val_feature_dir
+        thresholds = [0.60, 0.70, 0.80]        
+        min_consecutive_anomalies_list = [2, 3, 4, 5]
 
-        root_path = "Calf_Detection/Audio/Audio_Work_AE"
-        hyperparameter_tuning(root_path, X_train_reshaped, X_val_reshaped, config_list)
+        # for threshold in thresholds:
+        #     for min_consecutive_anomalies in min_consecutive_anomalies_list:
+        #         print(f"Testing with threshold: {threshold}, Min consecutive anomalies: {min_consecutive_anomalies}")
+        #         anomaly_results = test_consecutive_anomaly_per_window(model, feature_dir, threshold, min_consecutive_anomalies)
+        #         for result in anomaly_results:
+        #             print(f"File: {result[0]}, Start Window: {result[1]}, End Window: {result[2]}, Anomaly Detected: {result[3]}")
 
-    except Exception as e:
-        logging.error("An error occurred in the main script", exc_info=True)
+def main(evaluation_directory, enable_logging):
+    global LOGGING_ENABLED
+    LOGGING_ENABLED = enable_logging
+    root_path = 'Calf_Detection/Audio/Audio_Work_AE'
+    normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_training_set'}
+    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'}
+    mode_1,mode_2,mode_3="train","val","test"
+    
+    # Creating the standard scalar.
+    fit_scaler_to_training_data(normal_paths,SAMPLE_RATE,evaluation_directory)
+    #Training creation
+    for combination in hyperparameters_combinations:
+        save_features_in_batches(normal_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_1)
+        print(f"Saved features in batches for combination: {combination}")   
+        
+    # Validation creation
+    # for combination in hyperparameters_combinations:
+    #     save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_2)
+    #     print(f"Saved features in batches for combination: {combination}") 
+        
+    # experiment_with_configurations(evaluation_directory,hyperparameters_combinations)
+
+if __name__ == '__main__':
+    evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2'
+    main(evaluation_directory, enable_logging=False)

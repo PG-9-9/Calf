@@ -72,8 +72,8 @@ def convert_seconds(seconds):
         return f"{seconds:.2f}s"
 
 hyperparameters_combinations = [
-    {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 500, "batch_size": 30}
-    # {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
+    # {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 500, "batch_size": 30}
+    {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
     # {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
 ]
 
@@ -150,7 +150,7 @@ def extract_features(audio, sample_rate, feature_extraction_logger,scaler_create
     raw_audio_features = extract_raw_audio_features(audio, 10, feature_extraction_logger)
     features = np.concatenate((mfccs_processed,spectral_features, temporal_features, additional_features, raw_audio_features))
     if not scaler_creater:
-        scaler_path = os.path.join(output_dir, "scaler.gz")
+        scaler_path = os.path.join(output_dir, "2nd_scaler", "scaler.gz")
         scaler = joblib.load(scaler_path)
         # Reshape correctly for a single sample
         features = features.reshape(1, -1)  # Reshape for a single sample
@@ -182,7 +182,7 @@ def fit_scaler_to_training_data(training_paths, sample_rate, evaluation_director
     features_array = np.vstack(features_list)  # Convert list of arrays into a single 2D array
     scaler.fit(features_array)
     # Save the scaler for later use
-    scaler_file_path = os.path.join(evaluation_directory, 'scaler.gz')
+    scaler_file_path = os.path.join(evaluation_directory, '2nd_scaler','scaler.gz')
     try:
         joblib.dump(scaler, scaler_file_path)
         print(f"Scaler successfully saved to {scaler_file_path}")
@@ -404,9 +404,7 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
         val_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_val"
         
         train_feature_dir = os.path.join(evaluation_directory, train_dataset_dirname)
-        
-        evaluation_directory_1="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v3"
-        val_feature_dir = os.path.join(evaluation_directory_1, val_dataset_dirname)
+        val_feature_dir = os.path.join(evaluation_directory, val_dataset_dirname)
 
         # if not os.path.exists(train_feature_dir) or not os.path.exists(val_feature_dir):
         #     logging.error(f"One or both feature directories do not exist: {train_feature_dir}, {val_feature_dir}")
@@ -420,7 +418,7 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
         model = build_autoencoder(combination['expected_timesteps'], TOTAL_FEATURES, combination['lstm_neurons'],evaluation_directory,load_weights)
 
         # Callbacks
-        checkpoint_path = os.path.join(evaluation_directory_1,"00models/model_checkpoint.h5")
+        checkpoint_path = os.path.join(evaluation_directory,"00models/model_checkpoint.h5")
         callbacks = [
             ModelCheckpoint(checkpoint_path, save_best_only=True, monitor='loss', mode='min'),
             ReduceLROnPlateau(monitor='loss', factor=0.2, patience=5, min_lr=0.001, verbose=2)
@@ -431,7 +429,7 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
         # model.fit(train_dataset, validation_data=val_dataset, epochs=combination['epochs'], callbacks=callbacks)
         
         # Save final model
-        model_save_path = os.path.join(evaluation_directory_1,"00models/final_autoencoder_model.h5")
+        model_save_path = os.path.join(evaluation_directory,"00models/final_autoencoder_model.h5")
         model.save(model_save_path)
         # print(f"Final model saved to {model_save_path}")
         
@@ -453,22 +451,22 @@ def main(evaluation_directory, enable_logging):
     LOGGING_ENABLED = enable_logging
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_training_set'}
-    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_single_day/single_file'}
+    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_validation_set'}
     mode_1,mode_2,mode_3="train","val","test"
     
     # Creating the standard scalar.
-    # fit_scaler_to_training_data(normal_paths,SAMPLE_RATE,evaluation_directory)
-    # # Training creation
-    # for combination in hyperparameters_combinations:
-    #     save_features_in_batches(normal_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_1)
-    #     print(f"Saved features in batches for combination: {combination}")   
-        
-    #Validation creation
+    fit_scaler_to_training_data(normal_paths,SAMPLE_RATE,evaluation_directory)
+    # Training creation
     for combination in hyperparameters_combinations:
-        save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_2)
-        print(f"Saved features in batches for combination: {combination}") 
+        save_features_in_batches(normal_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_1)
+        print(f"Saved features in batches for combination: {combination}")   
         
-    experiment_with_configurations(evaluation_directory,hyperparameters_combinations, load_weights=False)
+    # Validation creation
+    # for combination in hyperparameters_combinations:
+    #     save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_2)
+    #     print(f"Saved features in batches for combination: {combination}") 
+        
+    # experiment_with_configurations(evaluation_directory,hyperparameters_combinations, load_weights=False)
 
 if __name__ == '__main__':
     evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v2'
