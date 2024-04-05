@@ -1,0 +1,33 @@
+# Media files
+*.avi
+*.zip
+*.mov
+*.mp4
+*.png
+*.jpg
+*.jpeg 
+*.wav
+*.mp3
+*.csv
+*.txt
+
+# temporary/generated files
+*.tfrecord
+*.record
+*.keras
+*.data-00000-of-00001
+*.gz
+*.tar
+*.egg-info/
+*.h5
+*.npz
+
+# model directories 
+models/
+models_7/
+new_app/New_Models/ 
+
+# Subsidary
+*.BUILD 
+*.proto
+*.xml
