@@ -409,8 +409,8 @@ def plot_rmse(batch_names, rmse_values, evaluation_directory):
 def experiment_with_configurations(evaluation_directory, hyperparameters_combinations,load_weights):
     for combination in hyperparameters_combinations:
         # Dataset directories
-        train_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_test" # 09-10-2023
-        val_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_val"
+        train_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_test" # 09-10-2023 Without Birth
+        val_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_val" # 09-10-2023 Only Birth
         
         train_feature_dir = os.path.join(evaluation_directory, train_dataset_dirname)
         val_feature_dir = os.path.join(evaluation_directory, val_dataset_dirname)
@@ -436,19 +436,18 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
         ]
         
         # Training
-        # model.fit(train_dataset, epochs=combination['epochs'], callbacks=callbacks, verbose=2,validation_data=val_dataset)
+        model.fit(train_dataset, epochs=combination['epochs'], callbacks=callbacks, verbose=2,validation_data=val_dataset)
         # model.fit(train_dataset, validation_data=val_dataset, epochs=combination['epochs'], callbacks=callbacks)
         
         # Save final model
         model_save_path = os.path.join(evaluation_directory,"00models/final_autoencoder_model.h5")
-        # model.save(model_save_path)
-        # print(f"Final model saved to {model_save_path}")
-        
-
+        model.save(model_save_path)
+        print(f"Final model saved to {model_save_path}")
+    
         model = load_model(model_save_path)
     
     # Directory containing your test features in batches
-        test=f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_test_full"
+        test=f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_test_full" # Both with birth and non-birth.
         val_feature_dir = os.path.join(evaluation_directory, test)
         test_feature_dir = os.path.join(evaluation_directory, val_feature_dir)
     
@@ -469,22 +468,22 @@ def main(evaluation_directory, enable_logging):
     LOGGING_ENABLED = enable_logging
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_single_day'}
-    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_single_day/09_Oct _full'}
-    mode_1,mode_2,mode_3="train","val_true","test_full"
+    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_abnormal_fullset'}
+    mode_1,mode_2,mode_3="train","val_true","normal_abnormal_fullset"
     
     ## Creating the standard scalar.
     # fit_scaler_to_training_data(normal_paths,SAMPLE_RATE,evaluation_directory)
-    # # Training creation
+    # Training creation
     # for combination in hyperparameters_combinations:
     #     save_features_in_batches(normal_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_3)
     #     print(f"Saved features in batches for combination: {combination}")   
         
-    # # Validation creationCalf_Detection/Audio/Audio_Work_AE/autoencoder_calf_v25a.py
+    # Validation creation 
     for combination in hyperparameters_combinations:
-        save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_3)
+        save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30, mode=mode_3)
         print(f"Saved features in batches for combination: {combination}") 
         
-    experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=True)
+    # experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=True)
 
 if __name__ == '__main__':
     evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v7'

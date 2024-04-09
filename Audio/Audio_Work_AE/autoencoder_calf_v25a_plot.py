@@ -392,65 +392,90 @@ def calculate_rmse(model, feature_dir):
     
     return batch_numbers, rmse_values
 
-def plot_rmse(batch_names, rmse_values, evaluation_directory):
-    plt.figure(figsize=(18, 6))
-    plt.plot(batch_names, rmse_values, marker='o', linestyle='-', color='#04316A')
-    plt.title('RMSE by Batch')
-    plt.xlabel('Batch Number')
-    plt.grid(True)
-    plt.ylabel('RMSE')
-    plt.xticks(rotation=45)
-    plt.tight_layout()
-    plt.savefig(os.path.join(evaluation_directory, f"rmse.png"))
-    plt.close()
+def write_rmse_sorted_desc(batch_numbers, rmse_values, output_file):
+    # Pair each batch number with its RMSE and sort based on RMSE in descending order
+    sorted_pairs = sorted(zip(batch_numbers, rmse_values), key=lambda x: x[1], reverse=True)
+    # Unzip the pairs back into two lists
+    sorted_batch_numbers, sorted_rmse_values = zip(*sorted_pairs)
+    
+    with open(output_file, 'w') as file:
+        file.write('Batch Number, RMSE (Descending)\n')  # Header
+        for batch_number, rmse in zip(sorted_batch_numbers, sorted_rmse_values):
+            file.write(f'{batch_number}, {rmse:.4f}\n')
+
+def read_rmse_from_file(input_file):
+    batch_numbers = []
+    rmse_values = []
+    with open(input_file, 'r') as file:
+        next(file)  # Skip header line
+        for line in file:
+            batch_number, rmse = line.strip().split(',')
+            batch_numbers.append(int(batch_number))
+            rmse_values.append(float(rmse))
+    return batch_numbers, rmse_values
 
 # =============== Experimentation Functions ===============
 
+# Training Peaks Generator
+# def experiment_with_configurations(evaluation_directory, hyperparameters_combinations,load_weights):
+#     for combination in hyperparameters_combinations:
+#         # Build model
+#         model = build_autoencoder(combination['expected_timesteps'], TOTAL_FEATURES, combination['lstm_neurons'],evaluation_directory,load_weights)
+        
+#         # Save final model
+#         model_save_path = os.path.join(evaluation_directory,"00models/final_autoencoder_model.h5")
+#         print(f"Model available in {model_save_path}")
+    
+#         model = load_model(model_save_path)
+    
+#     # Directory containing your test features in batches
+#         ind_date='08_Oct'
+#         test=f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_val_true_individual"
+#         val_feature_dir = os.path.join(evaluation_directory, test, ind_date)
+#         test_feature_dir = os.path.join(evaluation_directory, val_feature_dir)
+    
+#     # Calculate RMSE values for each test batch
+#         batch_numbers, rmse_values = calculate_rmse(model, test_feature_dir)
+        
+#         sorted_pairs = sorted(zip(batch_numbers, rmse_values), key=lambda x: x[0])
+#         sorted_batch_numbers, sorted_rmse_values = zip(*sorted_pairs)
+        
+#         output_file_path = os.path.join(evaluation_directory, f"{ind_date}_rmse_values.txt")
+#         write_rmse_to_file(sorted_batch_numbers, sorted_rmse_values, output_file_path)
+#         output_file_path_sorted = os.path.join(evaluation_directory, f"{ind_date}_sorted_rmse_values_desc.txt")
+#         write_rmse_sorted_desc(batch_numbers, rmse_values, output_file_path_sorted)
+        
+    
+#      # Plot the RMSE values
+        
+#         plt.figure(figsize=(18, 6))
+#         plt.plot(sorted_batch_numbers, sorted_rmse_values, marker='o', linestyle='-', color='#04316A')
+#         plt.title('RMSE by Batch')
+#         plt.xlabel('Batch Number')
+#         plt.grid(True)
+#         plt.ylabel('RMSE')
+#         plt.xticks(rotation=45)
+#         plt.tight_layout()
+#         plt.savefig(os.path.join(evaluation_directory, f"{ind_date}_rmse.png"))
+#         plt.close()
+
+# Training Peaks Generator
 def experiment_with_configurations(evaluation_directory, hyperparameters_combinations,load_weights):
     for combination in hyperparameters_combinations:
-        # Dataset directories
-        train_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_test" # 09-10-2023
-        val_dataset_dirname = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_val"
-        
-        train_feature_dir = os.path.join(evaluation_directory, train_dataset_dirname)
-        val_feature_dir = os.path.join(evaluation_directory, val_dataset_dirname)
-
-        # if not os.path.exists(train_feature_dir) or not os.path.exists(val_feature_dir):
-        #     logging.error(f"One or both feature directories do not exist: {train_feature_dir}, {val_feature_dir}")
-        #     continue
-        
-        # Load datasets
-        train_dataset = create_dataset_from_npz(train_feature_dir, combination['expected_timesteps'], TOTAL_FEATURES, combination['batch_size'])
-        val_dataset = create_dataset_from_npz(val_feature_dir, combination['expected_timesteps'], TOTAL_FEATURES, combination['batch_size'])
-        
         # Build model
         model = build_autoencoder(combination['expected_timesteps'], TOTAL_FEATURES, combination['lstm_neurons'],evaluation_directory,load_weights)
-
-        # Callbacks
-        checkpoint_path = os.path.join(evaluation_directory,"00models/model_checkpoint.h5")
-        early_stopping_callback = EarlyStopping(monitor='loss', patience=20, verbose=2, mode='min',min_delta=1e-4, restore_best_weights=True)
-        callbacks = [
-            ModelCheckpoint(checkpoint_path, save_best_only=True, monitor='loss', mode='min'),
-            ReduceLROnPlateau(monitor='loss', factor=0.2, patience=5, min_lr=0.001, verbose=2),
-            # early_stopping_callback
-        ]
-        
-        # Training
-        model.fit(train_dataset, epochs=combination['epochs'], callbacks=callbacks, verbose=2,validation_data=val_dataset)
-        # model.fit(train_dataset, validation_data=val_dataset, epochs=combination['epochs'], callbacks=callbacks)
         
         # Save final model
         model_save_path = os.path.join(evaluation_directory,"00models/final_autoencoder_model.h5")
-        model.save(model_save_path)
-        print(f"Final model saved to {model_save_path}")
-        
-
+        print(f"Model available in {model_save_path}")
+    
         model = load_model(model_save_path)
     
     # Directory containing your test features in batches
-        test=f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_test"
+        ind_date='12_Oct'
+        test=f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_normal_abnormal_fullset_ind"
         val_feature_dir = os.path.join(evaluation_directory, test)
-        test_feature_dir = os.path.join(evaluation_directory, val_feature_dir)
+        test_feature_dir = os.path.join(val_feature_dir, ind_date)
     
     # Calculate RMSE values for each test batch
         batch_numbers, rmse_values = calculate_rmse(model, test_feature_dir)
@@ -458,18 +483,32 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
         sorted_pairs = sorted(zip(batch_numbers, rmse_values), key=lambda x: x[0])
         sorted_batch_numbers, sorted_rmse_values = zip(*sorted_pairs)
         
-        output_file_path = os.path.join(evaluation_directory, "rmse_values.txt")
+        output_file_path = os.path.join(evaluation_directory, f"{ind_date}_rmse_values.txt")
         write_rmse_to_file(sorted_batch_numbers, sorted_rmse_values, output_file_path)
-    
-    # Plot the RMSE values
-        plot_rmse(sorted_batch_numbers, sorted_rmse_values, evaluation_directory)
+        
+        # Org
+        output_file_path_sorted = os.path.join(evaluation_directory, f"{ind_date}_sorted_rmse_values_desc.txt")
+        write_rmse_sorted_desc(batch_numbers, rmse_values, output_file_path_sorted)
+        
+
+     # Plot the RMSE values
+        plt.figure(figsize=(18, 6))
+        plt.plot(sorted_batch_numbers, sorted_rmse_values, marker='o', linestyle='-', color='#04316A')
+        plt.title('RMSE by Batch')
+        plt.xlabel('Batch Number')
+        plt.grid(True)
+        plt.ylabel('RMSE')
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        plt.savefig(os.path.join(evaluation_directory, f"{ind_date}_rmse.png"))
+        plt.close()
 
 def main(evaluation_directory, enable_logging):
     global LOGGING_ENABLED
     LOGGING_ENABLED = enable_logging
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
-    normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_single_day'}
-    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_single_day/09_Oct'}
+    normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v7/ws5_ss2.5_et23_bs30_val_true'}
+    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_single_day/08_Oct'}
     mode_1,mode_2,mode_3="train","val_true","test"
     
     ## Creating the standard scalar.
@@ -484,7 +523,7 @@ def main(evaluation_directory, enable_logging):
     #     save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30,mode=mode_3)
     #     print(f"Saved features in batches for combination: {combination}") 
         
-    experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=True)
+    experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=False)
 
 if __name__ == '__main__':
     evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v7'
