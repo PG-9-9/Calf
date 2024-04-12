@@ -39,13 +39,13 @@ if gpus:
         print(e)
 
 # for model_version in ["d0"]:
-for model_version in ["d2", "d3", "d4", "d5", "d6", "d7"]:
+for model_version in ["d0","d1","d2", "d3", "d4"]:
     #Training 
     command = [
         'python3',
         'Calf_Detection/models/research/object_detection/model_main_tf2.py',
         '--pipeline_config_path=Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version),
-        '--model_dir=Calf_Detection/new_app/New_Models/training/epochs_10/efficientdet_{}_coco17_tpu-32'.format(model_version),
+        '--model_dir=Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
         '--alsologtostderr'
     ]
     subprocess.run(command, check=True)
@@ -55,7 +55,7 @@ for model_version in ["d2", "d3", "d4", "d5", "d6", "d7"]:
         'python3',
         'Calf_Detection/models/research/object_detection/exporter_main_v2.py',
         '--trained_checkpoint_dir', 'Calf_Detection/new_app/New_Models/training/epochs_10/efficientdet_{}_coco17_tpu-32'.format(model_version),
-        '--output_directory', 'Calf_Detection/new_app/finetuned/epochs_10/efficientdet_{}_coco17_tpu-32'.format(model_version),
+        '--output_directory', 'Calf_Detection/new_app/finetuned/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
         '--pipeline_config_path', 'Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version)
     ]
     subprocess.run(command, check=True)
@@ -144,7 +144,7 @@ for model_version in ["d2", "d3", "d4", "d5", "d6", "d7"]:
         return detections
     
     detection_model = load_model('Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version),
-                                 'Calf_Detection/new_app/New_Models/training/epochs_10/efficientdet_{}_coco17_tpu-32'.format(model_version))
+                                 'Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version))
 
     thresholds = [0.25, 0.50, 0.75, 1.00]
     tpr_list = []
@@ -200,22 +200,22 @@ for model_version in ["d2", "d3", "d4", "d5", "d6", "d7"]:
 
     # Plot the ROC curve for each model version
     plt.figure(figsize=(10, 7))
-    plt.plot(fpr_list, tpr_list, '-o', label='ROC curve')
-    plt.plot([0, 1], [0, 1], linestyle='--')
+    plt.plot(fpr_list, tpr_list, '-o', label='ROC curve for EfficientDet-{}'.format(model_version))
+    plt.plot([0, 1], [0, 1], linestyle='--', label='Random chance')
 
     for i, threshold in enumerate(thresholds):
-        plt.annotate(f"{threshold:.2f}", (fpr_list[i], tpr_list[i]), 
-                     textcoords="offset points", 
-                     xytext=(0,10), 
-                     ha='center')
+        plt.annotate(f"Threshold={threshold:.2f}", (fpr_list[i], tpr_list[i]), 
+                    textcoords="offset points", 
+                    xytext=(10,-10), 
+                    ha='center')
 
     plt.xlabel('False Positive Rate')
     plt.ylabel('True Positive Rate')
-    plt.title(f'Receiver Operating Characteristic (ROC) Curve for {model_version}')
+    plt.title('ROC Curve')
     plt.legend()
     plt.grid(True)
-    save_path = f'Calf_Detection/new_app/New_Models/graphs/extended/roc_curve_{model_version}.png'
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
 
     # Save the plot to the specified path
+    save_path = f'Calf_Detection/new_app/New_Models/graphs/April/roc_curve_{model_version}.png'
     plt.savefig(save_path, bbox_inches='tight')
+    plt.close()  # Close the figure to avoid display in Jupyter notebooks

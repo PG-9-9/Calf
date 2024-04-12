@@ -460,48 +460,48 @@ def read_rmse_from_file(input_file):
 #         plt.close()
 
 # Training Peaks Generator
-def experiment_with_configurations(evaluation_directory, hyperparameters_combinations,load_weights):
+def experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights):
+    ind_dates=['06_Nov','26_Nov','10_Dec','11_Dec']
     for combination in hyperparameters_combinations:
         # Build model
-        model = build_autoencoder(combination['expected_timesteps'], TOTAL_FEATURES, combination['lstm_neurons'],evaluation_directory,load_weights)
+        model = build_autoencoder(combination['expected_timesteps'], TOTAL_FEATURES, combination['lstm_neurons'], evaluation_directory, load_weights)
         
         # Save final model
-        model_save_path = os.path.join(evaluation_directory,"00models/final_autoencoder_model.h5")
+        model_save_path = os.path.join(evaluation_directory, "00models/final_autoencoder_model.h5")
         print(f"Model available in {model_save_path}")
-    
         model = load_model(model_save_path)
-    
-    # Directory containing your test features in batches
-        ind_date='12_Oct'
-        test=f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_normal_abnormal_fullset_ind"
-        val_feature_dir = os.path.join(evaluation_directory, test)
-        test_feature_dir = os.path.join(val_feature_dir, ind_date)
-    
-    # Calculate RMSE values for each test batch
-        batch_numbers, rmse_values = calculate_rmse(model, test_feature_dir)
-        
-        sorted_pairs = sorted(zip(batch_numbers, rmse_values), key=lambda x: x[0])
-        sorted_batch_numbers, sorted_rmse_values = zip(*sorted_pairs)
-        
-        output_file_path = os.path.join(evaluation_directory, f"{ind_date}_rmse_values.txt")
-        write_rmse_to_file(sorted_batch_numbers, sorted_rmse_values, output_file_path)
-        
-        # Org
-        output_file_path_sorted = os.path.join(evaluation_directory, f"{ind_date}_sorted_rmse_values_desc.txt")
-        write_rmse_sorted_desc(batch_numbers, rmse_values, output_file_path_sorted)
-        
 
-     # Plot the RMSE values
-        plt.figure(figsize=(18, 6))
-        plt.plot(sorted_batch_numbers, sorted_rmse_values, marker='o', linestyle='-', color='#04316A')
-        plt.title('RMSE by Batch')
-        plt.xlabel('Batch Number')
-        plt.grid(True)
-        plt.ylabel('RMSE')
-        plt.xticks(rotation=45)
-        plt.tight_layout()
-        plt.savefig(os.path.join(evaluation_directory, f"{ind_date}_rmse.png"))
-        plt.close()
+        for ind_date in ind_dates:
+            # Directory containing your test features in batches
+            test = f"ws{combination['window_size']}_ss{combination['step_size']}_et{combination['expected_timesteps']}_bs{combination['batch_size']}_abnormal_mult_new_ind"
+            val_feature_dir = os.path.join(evaluation_directory, test)
+            test_feature_dir = os.path.join(val_feature_dir, ind_date)
+
+            # Calculate RMSE values for each test batch
+            batch_numbers, rmse_values = calculate_rmse(model, test_feature_dir)
+            
+            sorted_pairs = sorted(zip(batch_numbers, rmse_values), key=lambda x: x[0])
+            sorted_batch_numbers, sorted_rmse_values = zip(*sorted_pairs)
+            
+            output_file_path = os.path.join(evaluation_directory, f"{ind_date}_rmse_values.txt")
+            write_rmse_to_file(sorted_batch_numbers, sorted_rmse_values, output_file_path)
+            
+            # Organize and save RMSE values in descending order
+            output_file_path_sorted = os.path.join(evaluation_directory, f"{ind_date}_sorted_rmse_values_desc.txt")
+            write_rmse_sorted_desc(batch_numbers, rmse_values, output_file_path_sorted)
+
+            # Plot the RMSE values
+            plt.figure(figsize=(18, 6))
+            plt.plot(sorted_batch_numbers, sorted_rmse_values, marker='o', linestyle='-', color='#04316A')
+            plt.title(f'RMSE by Batch for {ind_date}')
+            plt.xlabel('Batch Number')
+            plt.grid(True)
+            plt.ylabel('RMSE')
+            plt.xticks(rotation=45)
+            plt.tight_layout()
+            plt.savefig(os.path.join(evaluation_directory, f"{ind_date}_rmse.png"))
+            plt.close()
+
 
 def main(evaluation_directory, enable_logging):
     global LOGGING_ENABLED

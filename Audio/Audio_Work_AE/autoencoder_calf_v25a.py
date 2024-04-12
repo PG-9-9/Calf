@@ -21,7 +21,8 @@ from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLRO
 from logging import NullHandler
 from tensorflow.keras.regularizers import L1L2
 from sklearn.metrics import mean_squared_error
-
+import zipfile
+import os
 
 
 # Logging configuration
@@ -74,8 +75,8 @@ def convert_seconds(seconds):
 
 hyperparameters_combinations = [
     {"window_size": 5, "step_size": 2.5, "expected_timesteps": 23, "lstm_neurons": 128, "epochs": 500, "batch_size": 30}
-    # {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 64, "epochs": 20, "batch_size": 32},
-    # {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 64, "epochs": 20, "batch_size": 32}
+    # {"window_size": 10, "step_size": 5, "expected_timesteps": 11, "lstm_neurons": 256, "epochs": 500, "batch_size": 30},
+    # {"window_size": 15, "step_size": 7.5, "expected_timesteps": 7, "lstm_neurons": 512, "epochs": 500, "batch_size": 30}
 ]
 
 def normalize_features(features, scaler):
@@ -143,12 +144,12 @@ def extract_raw_audio_features(audio, num_samples, logger=None):
 def extract_features(audio, sample_rate, feature_extraction_logger,scaler_creater,output_dir):
     # Aggregate all feature extraction processes
     start_time = time.time()
-    mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=13)    # Extract MFCCs
+    mfccs = librosa.feature.mfcc(y=audio, sr=sample_rate, n_mfcc=13)    # Extract MFCCs : 13 
     mfccs_processed = np.mean(mfccs.T,axis=0)
-    spectral_features = extract_spectral_features(audio, sample_rate, feature_extraction_logger)
-    temporal_features = extract_temporal_features(audio, feature_extraction_logger)
-    additional_features = extract_additional_features(audio, sample_rate, feature_extraction_logger)
-    raw_audio_features = extract_raw_audio_features(audio, 10, feature_extraction_logger)
+    spectral_features = extract_spectral_features(audio, sample_rate, feature_extraction_logger) # 3 Features
+    temporal_features = extract_temporal_features(audio, feature_extraction_logger) # 2 Features
+    additional_features = extract_additional_features(audio, sample_rate, feature_extraction_logger) # 5 Features
+    raw_audio_features = extract_raw_audio_features(audio, 10, feature_extraction_logger) # 10 features
     features = np.concatenate((mfccs_processed,spectral_features, temporal_features, additional_features, raw_audio_features))
     if not scaler_creater:
         scaler_path = os.path.join(output_dir, "scaler.gz")
@@ -202,37 +203,7 @@ def adjust_features_shape(features, expected_timesteps, total_features):
     return features
 
 # =============== Model Building Functions ===============
-                
-# def build_autoencoder(expected_timesteps, total_features, lstm_neurons, evaluation_directory, load_weights):
-#     model_file_path = os.path.join(evaluation_directory, "00models", "final_autoencoder_model.h5")
-#     if load_weights and os.path.exists(model_file_path):
-#         print(f"Loading model weights from {model_file_path}")
-#         return load_model(model_file_path)
-    
-#     input_layer = Input(shape=(expected_timesteps, total_features))
 
-#     # Encoder
-#     # Using Conv1D with stride of 1 to maintain temporal resolution
-#     x = Conv1D(64, kernel_size=3, padding='same', activation='relu', strides=1)(input_layer)
-#     x = BatchNormalization()(x)
-#     x = Dropout(0.1)(x)
-#     x = LSTM(lstm_neurons, activation='tanh', return_sequences=True)(x)
-#     x = LSTM(int(lstm_neurons / 2), activation='tanh', return_sequences=False)(x)
-#     x = BatchNormalization()(x)
-#     x = Dropout(0.1)(x)
-#     x = RepeatVector(expected_timesteps)(x)
-
-#     # Decoder
-#     x = LSTM(int(lstm_neurons / 2), activation='tanh', return_sequences=True)(x)
-#     x = LSTM(lstm_neurons, activation='tanh', return_sequences=True)(x)
-#     x = BatchNormalization()(x)
-#     x = Dropout(0.1)(x)
-#     output_layer = TimeDistributed(Dense(total_features))(x)
-
-#     autoencoder = Model(inputs=input_layer, outputs=output_layer)
-#     autoencoder.compile(optimizer='adam', loss='mse')
-
-#     return autoencoder
 def build_autoencoder(expected_timesteps, total_features, lstm_neurons, evaluation_directory, load_weights):
     model_file_path = os.path.join(evaluation_directory, "00models", "final_autoencoder_model.h5")
     if load_weights and os.path.exists(model_file_path):
@@ -247,7 +218,7 @@ def build_autoencoder(expected_timesteps, total_features, lstm_neurons, evaluati
     x = BatchNormalization()(x)
     x = Dropout(0.1)(x)
     
-    # Updated to Bidirectional LSTM
+    #  Bidirectional LSTM
     x = Bidirectional(LSTM(lstm_neurons, activation='tanh', return_sequences=True, kernel_regularizer=L1L2(l1=0.01, l2=0.01)))(x)
     x = Bidirectional(LSTM(int(lstm_neurons / 2), activation='tanh', return_sequences=False, kernel_regularizer=L1L2(l1=0.01, l2=0.01)))(x)
     x = BatchNormalization()(x)
@@ -462,14 +433,25 @@ def experiment_with_configurations(evaluation_directory, hyperparameters_combina
     
     # Plot the RMSE values
         plot_rmse(sorted_batch_numbers, sorted_rmse_values, evaluation_directory)
+        
+
+
+def unzip_file(zip_path, output_dir):
+
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(output_dir)
+        print(f"All files extracted to {output_dir}")
 
 def main(evaluation_directory, enable_logging):
     global LOGGING_ENABLED
     LOGGING_ENABLED = enable_logging
     root_path = 'Calf_Detection/Audio/Audio_Work_AE'
     normal_paths = {'normal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_single_day'}
-    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/normal_abnormal_fullset'}
-    mode_1,mode_2,mode_3="train","val_true","normal_abnormal_fullset"
+    validation_paths = {'abnormal': '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_muliple_new/new_data_wav'}
+    mode_1,mode_2,mode_3="train","val_true","abnormal_mult_new"
     
     ## Creating the standard scalar.
     # fit_scaler_to_training_data(normal_paths,SAMPLE_RATE,evaluation_directory)
@@ -479,11 +461,15 @@ def main(evaluation_directory, enable_logging):
     #     print(f"Saved features in batches for combination: {combination}")   
         
     # Validation creation 
-    for combination in hyperparameters_combinations:
-        save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30, mode=mode_3)
-        print(f"Saved features in batches for combination: {combination}") 
+    zip_file="/home/woody/iwso/iwso122h/Calf_Detection/Audio/new_data_wav.zip"
+    output_dir="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_muliple_new"
+    # unzip_file(zip_file, output_dir)
+    
+    # for combination in hyperparameters_combinations:
+    #     save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30, mode=mode_3)
+    #     print(f"Saved features in batches for combination: {combination}") 
         
-    # experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=True)
+    experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=True)
 
 if __name__ == '__main__':
     evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v7'
