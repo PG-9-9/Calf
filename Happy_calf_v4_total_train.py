@@ -39,37 +39,37 @@ if gpus:
         print(e)
 
 # for model_version in ["d0"]:
-for model_version in ["d0","d1","d2", "d3", "d4"]:
+for model_version in ["d0","d1","d2"]:
     #Training 
-    command = [
-        'python3',
-        'Calf_Detection/models/research/object_detection/model_main_tf2.py',
-        '--pipeline_config_path=Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version),
-        '--model_dir=Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
-        '--alsologtostderr'
-    ]
-    subprocess.run(command, check=True)
+    # command = [
+    #     'python3',
+    #     'Calf_Detection/models/research/object_detection/model_main_tf2.py',
+    #     '--pipeline_config_path=Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version),  # model config file 
+    #     '--model_dir=Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
+    #     '--alsologtostderr'
+    # ]
+    # subprocess.run(command, check=True)
 
     #Export
     command = [
         'python3',
         'Calf_Detection/models/research/object_detection/exporter_main_v2.py',
-        '--trained_checkpoint_dir', 'Calf_Detection/new_app/New_Models/training/epochs_10/efficientdet_{}_coco17_tpu-32'.format(model_version),
+        '--trained_checkpoint_dir', 'Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
         '--output_directory', 'Calf_Detection/new_app/finetuned/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
         '--pipeline_config_path', 'Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version)
     ]
     subprocess.run(command, check=True)
 
     # Evaluation
-    # command = [
-    #     'python3',
-    #     'Calf_Detection/models/research/object_detection/model_main_tf2.py',
-    #     '--pipeline_config_path', 'Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version),
-    #     '--model_dir', 'Calf_Detection/new_app/New_Models/training/epochs_10/efficientdet_{}_coco17_tpu-32'.format(model_version),
-    #     '--checkpoint_dir', 'Calf_Detection/new_app/New_Models/training/epochs_10/efficientdet_{}_coco17_tpu-32'.format(model_version),
-    #     '--alsologtostderr'
-    # ]
-    # subprocess.run(command, check=True)
+    command = [
+        'python3',
+        'Calf_Detection/models/research/object_detection/model_main_tf2.py',
+        '--pipeline_config_path', 'Calf_Detection/new_app/New_Models/config/efficientdet_{}_coco17_tpu-32.config'.format(model_version),
+        '--model_dir', 'Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
+        '--checkpoint_dir', 'Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_{}_coco17_tpu-32'.format(model_version),
+        '--alsologtostderr'
+    ]
+    subprocess.run(command, check=True)
     TEST_IMAGE_PATHS = glob.glob('Calf_Detection/new_app/test/*.jpg')
 
     # Metrics Initialization

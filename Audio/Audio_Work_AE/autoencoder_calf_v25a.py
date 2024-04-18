@@ -461,15 +461,15 @@ def main(evaluation_directory, enable_logging):
     #     print(f"Saved features in batches for combination: {combination}")   
         
     # Validation creation 
-    zip_file="/home/woody/iwso/iwso122h/Calf_Detection/Audio/new_data_wav.zip"
-    output_dir="/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/abnormal_muliple_new"
-    # unzip_file(zip_file, output_dir)
+    zip_file="/home/woody/iwso/iwso122h/Calf_Detection/new_img_data/img_data.zip"
+    output_dir="/home/woody/iwso/iwso122h/Calf_Detection/new_img_data"
+    unzip_file(zip_file, output_dir)
     
     # for combination in hyperparameters_combinations:
     #     save_features_in_batches(validation_paths, SAMPLE_RATE, combination, evaluation_directory, n_files_per_batch=30, mode=mode_3)
     #     print(f"Saved features in batches for combination: {combination}") 
         
-    experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=True)
+    # experiment_with_configurations(evaluation_directory, hyperparameters_combinations, load_weights=True)
 
 if __name__ == '__main__':
     evaluation_directory = '/home/woody/iwso/iwso122h/Calf_Detection/Audio/Audio_Work_AE/View_Files/Debug_v7'
