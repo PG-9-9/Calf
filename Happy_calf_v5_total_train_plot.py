@@ -1,4 +1,3 @@
-
 import tensorflow as tf
 import numpy as np
 import xml.etree.ElementTree as ET
@@ -69,45 +68,105 @@ def load_model(pipeline_file, model_dir):
     
     return detection_model
 
-def plot_detection_scores(input_dir, model_dir, pipeline_file):
-    TEST_IMAGE_PATHS = sorted(glob.glob(f'{input_dir}/*.jpg'))  # Sort the image paths
+# def plot_detection_scores(input_dir, model_dir, pipeline_file, filename, image_save_dir, start_index, end_index, event_name):
+#     TEST_IMAGE_PATHS = sorted(glob.glob(f'{input_dir}/*.jpg'))  # Ensure images are sorted
+#     model = load_model(pipeline_file, model_dir)
+    
+#     scores = []
+#     image_indices = np.arange(len(TEST_IMAGE_PATHS))  # Numeric indices for the x-axis
+
+#     for image_path in TEST_IMAGE_PATHS:
+#         image_np = load_image_into_numpy_array(image_path)
+#         detections = detect_objects(model, image_np)
+
+#         detection_scores = detections['detection_scores'].numpy()[0]
+#         detection_classes = detections['detection_classes'].numpy()[0]
+#         calf_indices = np.where(detection_classes == 1)[0]
+#         calf_scores = detection_scores[calf_indices]
+#         max_score = max(calf_scores, default=0)  # Use default=0 if no calf detected
+#         scores.append(max_score)
+
+#     base_time = datetime.strptime("00:00:00", "%H:%M:%S")
+#     time_labels = [base_time + timedelta(minutes=int(i)) for i in image_indices]
+#     formatted_labels = [time.strftime('%H:%M:%S') for time in time_labels]
+
+#     plt.figure(figsize=(18, 6))
+#     plt.plot(image_indices, scores, label='Detection Confidence',marker='o', linestyle='-',color='#04316A')  # Changed to line graph
+#     plt.xlabel('Time (hh:mm:ss)')
+#     plt.ylabel('Detection Confidence')
+#     plt.title('Efficient Det D2')
+#     plt.xticks(image_indices[::120], formatted_labels[::120], rotation=45)  # Set x-ticks every 120 minutes
+#     plt.grid(True)
+
+#     # Highlight the specified interval with a red rectangle and label it
+#     plt.axvspan(start_index, end_index, color='red', alpha=0.3, label=f'{event_name}: {start_index}-{end_index}')
+#     plt.legend(loc='upper left')  # Add a legend
+#     plt.xlim(left=0, right=len(TEST_IMAGE_PATHS) - 1)
+
+#     plt.tight_layout()
+#     img_save_path = os.path.join(image_save_dir, filename)    
+#     plt.savefig(img_save_path)
+#     plt.show()
+
+def plot_detection_scores(input_dir, model_dir, pipeline_file, filename, image_save_dir, start_index, end_index, event_name, day):
+    TEST_IMAGE_PATHS = sorted(glob.glob(f'{input_dir}/*.jpg'))  # Ensure images are sorted
     model = load_model(pipeline_file, model_dir)
     
     scores = []
-    image_indices = np.arange(len(TEST_IMAGE_PATHS))  # Create an index array for the images
+    image_indices = np.arange(len(TEST_IMAGE_PATHS))  # Numeric indices for the x-axis
 
-    for image_path in TEST_IMAGE_PATHS:
-        image_np = load_image_into_numpy_array(image_path)
-        detections = detect_objects(model, image_np)
+    # Open a file to save the confidence scores
+    scores_filename = os.path.join(image_save_dir, f'{day}_d1_confidence_scores.txt')
+    with open(scores_filename, 'w') as file:
+        file.write("Batch Number, Detection Score\n")
+        for image_path in TEST_IMAGE_PATHS:
+            image_np = load_image_into_numpy_array(image_path)
+            detections = detect_objects(model, image_np)
 
-        detection_scores = detections['detection_scores'].numpy()[0]
-        detection_classes = detections['detection_classes'].numpy()[0]
-        calf_indices = np.where(detection_classes == 1)[0]
-        calf_scores = detection_scores[calf_indices]
-        max_score = max(calf_scores, default=0)  # default to 0 if no calf detected
-        scores.append(max_score)
+            detection_scores = detections['detection_scores'].numpy()[0]
+            detection_classes = detections['detection_classes'].numpy()[0]
+            calf_indices = np.where(detection_classes == 1)[0]
+            calf_scores = detection_scores[calf_indices]
+            max_score = max(calf_scores, default=0)  # Use default=0 if no calf detected
+            scores.append(max_score)
 
-    # Create time labels for the x-axis
+            # Write the index and score to the file
+            file.write(f"{image_indices[len(scores)-1] + 1},{max_score}\n")
+
     base_time = datetime.strptime("00:00:00", "%H:%M:%S")
     time_labels = [base_time + timedelta(minutes=int(i)) for i in image_indices]
     formatted_labels = [time.strftime('%H:%M:%S') for time in time_labels]
 
-    # Plot the scores per image
-    plt.figure(figsize=(12, 8))
-    plt.bar(image_indices, scores)
+    plt.figure(figsize=(18, 6))
+    plt.plot(image_indices, scores, label='Detection Confidence', marker='o', linestyle='-', color='#04316A')
     plt.xlabel('Time (hh:mm:ss)')
-    plt.ylabel('Highest Detection Confidence')
-    plt.title('Detection Confidence for Class "Calf" on Each Image')
+    plt.ylabel('Detection Confidence')
+    plt.title('Efficient Det D2')
     plt.xticks(image_indices[::120], formatted_labels[::120], rotation=45)  # Set x-ticks every 120 minutes
     plt.grid(True)
+
+    # Highlight the specified interval with a red rectangle and label it
+    plt.axvspan(start_index, end_index, color='red', alpha=0.3, label=f'{event_name}: {start_index}-{end_index}')
+    plt.legend(loc='upper right')  # Add a legend
+
+    plt.xlim(left=0, right=len(TEST_IMAGE_PATHS) - 1)  # Set the limits for the x-axis to match exactly the range of indices
+
     plt.tight_layout()
-    input_dir="/home/woody/iwso/iwso122h/Calf_Detection/new_img_data/graphs"
-    img_save_path=os.path.join(input_dir,"d0_detection_scores.png")    
+    img_save_path = os.path.join(image_save_dir, filename)    
     plt.savefig(img_save_path)
     plt.show()
 
-# Usage example (adjust with your actual paths)
-input_img_dir = "/home/woody/iwso/iwso122h/Calf_Detection/new_img_data/img_data/2023-10-09"
-model_checkpoint = "/home/woody/iwso/iwso122h/Calf_Detection/new_app/New_Models/training/epochs_100_new/efficientdet_d0_coco17_tpu-32"
-pipeline_config = "/home/woody/iwso/iwso122h/Calf_Detection/new_app/New_Models/config/efficientdet_d0_coco17_tpu-32.config"
-plot_detection_scores(input_img_dir, model_checkpoint, pipeline_config)
+
+input_img_dir = "/home/woody/iwso/iwso122h/Calf_Detection/new_img_data/images_test/2023-11-06"
+# model_checkpoint = "/home/woody/iwso/iwso122h/Calf_Detection/new_app/New_Models/training/epochs_10/efficientdet_d0_coco17_tpu-32"
+# pipeline_config = "/home/woody/iwso/iwso122h/Calf_Detection/new_app/New_Models/config/efficientdet_d0_coco17_tpu-32.config"
+model_checkpoint="/home/woody/iwso/iwso122h/Calf_Detection/00_effdet_training/efficientdet_d1_coco17_tpu-32"
+pipeline_config="/home/woody/iwso/iwso122h/Calf_Detection/new_app/New_Models/config/efficientdet_d0_coco17_tpu-32.config"
+filename="06_d1_detection_score.png"
+day="06_Dec"
+start_index = 394  
+end_index = 414   
+event_name = "Birthing Event"  #  event name
+image_save_dir = "/home/woody/iwso/iwso122h/Calf_Detection/new_img_data/graphs"  
+
+plot_detection_scores(input_img_dir, model_checkpoint, pipeline_config, filename, image_save_dir, start_index, end_index, event_name, day)

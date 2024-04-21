@@ -21,11 +21,13 @@
 *.egg-info/
 *.h5
 *.npz
+*.out.tfevents
 
 # model directories 
 models/
 models_7/
 new_app/New_Models/ 
+00_effdet_training/
 
 # Subsidary
 *.BUILD 

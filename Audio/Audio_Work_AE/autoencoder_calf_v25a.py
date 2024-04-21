@@ -461,7 +461,7 @@ def main(evaluation_directory, enable_logging):
     #     print(f"Saved features in batches for combination: {combination}")   
         
     # Validation creation 
-    zip_file="/home/woody/iwso/iwso122h/Calf_Detection/new_img_data/img_data.zip"
+    zip_file="/home/woody/iwso/iwso122h/Calf_Detection/new_img_data/test_img_data.zip"
     output_dir="/home/woody/iwso/iwso122h/Calf_Detection/new_img_data"
     unzip_file(zip_file, output_dir)
     
